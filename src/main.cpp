@@ -27,8 +27,8 @@ StepMotorEncoder bigEnc(ENC3_A_PIN, ENC3_B_PIN);
 // ═══════════════════════════════════════════════════════════════
 // DİNAMİK PARAMETRELER
 // ═══════════════════════════════════════════════════════════════
-static long bigFreqMin = 20;
-static long bigFreqMax = 50;
+static long bigFreqMin = 50;
+static long bigFreqMax = 100;
 static long zEncMin = 0;
 static long zEncMax = 20000;
 
@@ -58,6 +58,7 @@ void handleXAyarla(const char* cmd);
 void handleXShow();
 void handleX2Ayarla(const char* cmd);
 void handleX1Ayarla(const char* cmd);
+
 // ═══════════════════════════════════════════════════════════════
 // SETUP
 // ═══════════════════════════════════════════════════════════════
@@ -110,6 +111,47 @@ void loop() {
   oynatmaRun();
   ckRun();
   coRun();
+
+  // MANUEL KOMUT ARKA PLANLARI (Sadece diğerleri aktif değilse)
+  // ═══════════════════════════════════════════════════════════════
+  
+  // ─────────────────────────────────────────────────────────────
+  // MOTOR Z - Manuel Pulse Arka Planı
+  // ─────────────────────────────────────────────────────────────
+  if (pulseAtAktifMi(MOTOR_Z)) {
+    if (!moveToAktifMi(MOTOR_Z) && 
+        !oynatmaAktifMi() && 
+        !coAktifMi()) {
+      useMotor(MOTOR_Z);
+      pulseAt(0, 0, 0);
+    }
+  }
+  
+  // ─────────────────────────────────────────────────────────────
+  // MOTOR X - Manuel Pulse Arka Planı
+  // ─────────────────────────────────────────────────────────────
+  if (pulseAtAktifMi(MOTOR_X)) {
+    if (!moveToAktifMi(MOTOR_X) && 
+        !ckAktifMi() && 
+        !coAktifMi()) {
+      useMotor(MOTOR_X);
+      pulseAt(0, 0, 0);
+    }
+  }
+  
+  // ─────────────────────────────────────────────────────────────
+  // MOTOR BIG - Manuel Pulse Arka Planı
+  // ─────────────────────────────────────────────────────────────
+  if (pulseAtAktifMi(MOTOR_B)) {
+    if (!moveToAktifMi(MOTOR_B) && 
+        !kayitAktifMi() && 
+        !oynatmaAktifMi() && 
+        !ckAktifMi() && 
+        !coAktifMi()) {
+      useMotor(MOTOR_B);
+      pulseAt(0, 0, 0);
+    }
+  }
   
   while (Serial.available() > 0) {
     char c = Serial.read();
@@ -469,6 +511,12 @@ void handleCiftKayit() {
   Serial.println(F("  Kayıt1      : İleri (BIG: 0→16000)"));
   Serial.println(F("  Kayıt2      : Geri  (BIG: 16000→0)"));
   Serial.println(F("───────────────────────────────────────────────"));
+  
+  // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+  while (Serial.available() > 0) {
+    Serial.read();
+  }
+  
   Serial.print(F("Başlat? (Y/N): "));
   
   unsigned long t = millis();
@@ -523,6 +571,12 @@ void handleCiftOynatma() {
   Serial.print(F("  Z Enc Max   : "));
   Serial.println(zEncMax);
   Serial.println(F("───────────────────────────────────────────────"));
+  
+  // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+  while (Serial.available() > 0) {
+    Serial.read();
+  }
+  
   Serial.print(F("Başlat? (Y/N): "));
   
   unsigned long t = millis();
@@ -566,6 +620,11 @@ void handleX1Ayarla(const char* cmd) {
     Serial.print(F("  Mevcut X encoder: "));
     Serial.println(mevcutX);
     
+    // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+    while (Serial.available() > 0) {
+      Serial.read();
+    }
+    
     Serial.print(F("\n  X1 pozisyonunu bu değere ayarla? (Y/N): "));
     
     // [ONAY BEKLE]
@@ -603,6 +662,11 @@ void handleX1Ayarla(const char* cmd) {
       Serial.print(F("  Yeni X1 pozisyonu: "));
       Serial.println(yeniDeger);
       
+      // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+      while (Serial.available() > 0) {
+        Serial.read();
+      }
+      
       Serial.print(F("\n  X1'i bu değere ayarla? (Y/N): "));
       
       // [ONAY BEKLE]
@@ -634,10 +698,10 @@ void handleX1Ayarla(const char* cmd) {
       Serial.println(F("✗ Geçersiz format!"));
       Serial.println(F("  Kullanım: X1 SET  veya  X1 5000"));
     }
-    Serial.println();
   }
-}
   
+  Serial.println();
+}
 
 // ─────────────────────────────────────────────────────────────
 // [X2 SET] → Mevcut X encoder'ı x2Pos olarak kaydet
@@ -654,6 +718,11 @@ void handleX2Ayarla(const char* cmd) {
     
     Serial.print(F("  Mevcut X encoder: "));
     Serial.println(mevcutX);
+    
+    // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+    while (Serial.available() > 0) {
+      Serial.read();
+    }
     
     Serial.print(F("\n  X2 pozisyonunu bu değere ayarla? (Y/N): "));
     
@@ -691,6 +760,11 @@ void handleX2Ayarla(const char* cmd) {
     if (sscanf(cmd + 3, "%ld", &yeniDeger) == 1) {
       Serial.print(F("  Yeni X2 pozisyonu: "));
       Serial.println(yeniDeger);
+      
+      // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
+      while (Serial.available() > 0) {
+        Serial.read();
+      }
       
       Serial.print(F("\n  X2'yi bu değere ayarla? (Y/N): "));
       

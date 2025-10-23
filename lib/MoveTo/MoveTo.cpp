@@ -1,12 +1,12 @@
-// MoveTo.cpp - İVMELİ HAREKET MODÜLÜ v2 FINAL
+// MoveTo.cpp - İVMELİ HAREKET MODÜLÜ v3 - MOTOR BAZLI RAMPA + KESİN HEDEF
 #include "MoveTo.h"
 #include "PulseAt.h"
-#include "Config.h"  // ← ENA_PINS için eklendi
+#include "Config.h"
 
 // ═══════════════════════════════════════════════════════════════
-// PIN TABLOLARI (Config.h'den)
+// PIN TABLOLARI
 // ═══════════════════════════════════════════════════════════════
-static const uint8_t enaPins[3] = ENA_PINS;  // ENABLE pin dizisi
+static const uint8_t enaPins[3] = ENA_PINS;
 
 // ═══════════════════════════════════════════════════════════════
 // HAREKET FAZI
@@ -24,15 +24,22 @@ enum MoveFaz {
 struct MoveToState {
   bool aktif = false;
   bool bittiEdge = false;
+  
+  // HEDEF BILGILERI (SABİT - HİÇ DEĞİŞMEZ!)
   long hedefEnc = 0;
   long baslangicEnc = 0;
+  unsigned long toplamPulse = 0;  // TOPLAM atılacak pulse (SABİT!)
   
+  // HAREKET BILGILERI
   MoveFaz faz = FAZ_KAPALI;
   unsigned int maxHz = 0;
-  unsigned long toplamPulse = 0;
-  unsigned long kalanPulse = 0;
   int yon = 0;
   
+  // SEGMENT TAKIBI
+  unsigned long atilanPulse = 0;        // Şu ana kadar atılan pulse
+  unsigned long sonSegmentPulse = 0;    // Son segment'in pulse sayısı
+  
+  // ZAMANLAMA
   unsigned long baslangicMs = 0;
 };
 
@@ -61,26 +68,55 @@ static long getEncoderPos(uint8_t motorIndex) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HIZ HESAPLAMA
+// MOTOR PARAMETRELERİ
 // ═══════════════════════════════════════════════════════════════
-static unsigned int hesaplaHiz(MoveToState* s) {
+static unsigned long getRampaPulse(uint8_t motorIndex) {
+  switch (motorIndex) {
+    case MOTOR_Z:  return ACCEL_RAMP_Z;   // 4000
+    case MOTOR_X:  return ACCEL_RAMP_X;   // 3000
+    case MOTOR_B:  return ACCEL_RAMP_BIG; // 200
+    default:       return 200;
+  }
+}
+
+static unsigned int getMinSpeed(uint8_t motorIndex) {
+  switch (motorIndex) {
+    case MOTOR_Z:  return MIN_SPEED_Z;    // 20 Hz
+    case MOTOR_X:  return MIN_SPEED_X;    // 30 Hz
+    case MOTOR_B:  return MIN_SPEED_BIG;  // 50 Hz
+    default:       return 50;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HIZ HESAPLAMA (Motor bazlı)
+// ═══════════════════════════════════════════════════════════════
+static unsigned int hesaplaHiz(MoveToState* s, uint8_t motorIndex) {
+  unsigned long rampaPulse = getRampaPulse(motorIndex);
+  unsigned int minSpeed = getMinSpeed(motorIndex);
+  
   if (s->faz == FAZ_HIZLANMA) {
-    unsigned long tamamlanan = s->toplamPulse - s->kalanPulse;
-    double oran = (double)tamamlanan / (double)ACCEL_RAMP_PULSE;
+    // İlk rampaPulse kadar pulse'da hızlan
+    double oran = (double)s->atilanPulse / (double)rampaPulse;
     if (oran > 1.0) oran = 1.0;
-    unsigned int hiz = MIN_SPEED_HZ + (unsigned int)((s->maxHz - MIN_SPEED_HZ) * oran);
+    
+    unsigned int hiz = minSpeed + (unsigned int)((s->maxHz - minSpeed) * oran);
     return hiz;
   }
   else if (s->faz == FAZ_SABIT_HIZ) {
     return s->maxHz;
   }
   else if (s->faz == FAZ_YAVASLAMA) {
-    double oran = (double)s->kalanPulse / (double)ACCEL_RAMP_PULSE;
+    // Son rampaPulse kadar pulse'da yavaşla
+    unsigned long kalan = s->toplamPulse - s->atilanPulse;
+    double oran = (double)kalan / (double)rampaPulse;
     if (oran > 1.0) oran = 1.0;
-    unsigned int hiz = MIN_SPEED_HZ + (unsigned int)((s->maxHz - MIN_SPEED_HZ) * oran);
+    
+    unsigned int hiz = minSpeed + (unsigned int)((s->maxHz - minSpeed) * oran);
     return hiz;
   }
-  return MIN_SPEED_HZ;
+  
+  return minSpeed;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -110,7 +146,8 @@ bool moveTo(uint8_t motorIndex, long hedefEnc, unsigned int maxHz) {
     return false;
   }
   
-  if (maxHz < MIN_SPEED_HZ) {
+  unsigned int minSpeed = getMinSpeed(motorIndex);
+  if (maxHz < minSpeed) {
     return false;
   }
   
@@ -125,32 +162,45 @@ bool moveTo(uint8_t motorIndex, long hedefEnc, unsigned int maxHz) {
   unsigned long pulse = (unsigned long)abs(fark);
   int yon = (fark > 0) ? 0 : 1;
   
+  // ─────────────────────────────────────────────────────────────
+  // YENİ: DURUM BAŞLATMA (Kesin pulse hesabı)
+  // ─────────────────────────────────────────────────────────────
   st[motorIndex].aktif = true;
   st[motorIndex].bittiEdge = false;
   st[motorIndex].hedefEnc = hedefEnc;
   st[motorIndex].baslangicEnc = mevcutEnc;
   st[motorIndex].maxHz = maxHz;
-  st[motorIndex].toplamPulse = pulse;
-  st[motorIndex].kalanPulse = pulse;
+  st[motorIndex].toplamPulse = pulse;     // ← SABİT KALIR!
+  st[motorIndex].atilanPulse = 0;         // ← Sıfırdan başla
   st[motorIndex].yon = yon;
   st[motorIndex].baslangicMs = millis();
   
-  if (pulse <= ACCEL_RAMP_PULSE) {
-    st[motorIndex].faz = FAZ_YAVASLAMA;
+  // ─────────────────────────────────────────────────────────────
+  // FAZ BELİRLEME (Motor bazlı rampa)
+  // ─────────────────────────────────────────────────────────────
+  unsigned long rampaPulse = getRampaPulse(motorIndex);
+  
+  if (pulse <= rampaPulse) {
+    st[motorIndex].faz = FAZ_YAVASLAMA;  // Sadece yavaşlama
   } 
-  else if (pulse <= 2 * ACCEL_RAMP_PULSE) {
-    st[motorIndex].faz = FAZ_HIZLANMA;
+  else if (pulse <= 2 * rampaPulse) {
+    st[motorIndex].faz = FAZ_HIZLANMA;   // Hızlanma + yavaşlama
   } 
   else {
-    st[motorIndex].faz = FAZ_HIZLANMA;
+    st[motorIndex].faz = FAZ_HIZLANMA;   // Tam profil
   }
   
-  unsigned int hiz = hesaplaHiz(&st[motorIndex]);
+  // ─────────────────────────────────────────────────────────────
+  // İLK SEGMENTİ BAŞLAT
+  // ─────────────────────────────────────────────────────────────
+  unsigned int hiz = hesaplaHiz(&st[motorIndex], motorIndex);
   unsigned long segmentPulse = hesaplaSegmentPulse(hiz);
   
-  if (segmentPulse > st[motorIndex].kalanPulse) {
-    segmentPulse = st[motorIndex].kalanPulse;
+  if (segmentPulse > pulse) {
+    segmentPulse = pulse;
   }
+  
+  st[motorIndex].sonSegmentPulse = segmentPulse;
   
   useMotor(motorIndex);
   pulseAt(segmentPulse, yon, hiz);
@@ -177,36 +227,48 @@ void moveToRun() {
     // Segment bitti mi?
     // ───────────────────────────────────────────────────────────
     if (pulseAtBittiMi(m)) {
-      // ─────────────────────────────────────────────────────────
-      // ✅ KALAN PULSE'U GÜNCELLE (Encoder'dan gerçek fark)
-      // ─────────────────────────────────────────────────────────
-      long mevcutEnc = getEncoderPos(m);
-      long gercekFark = st[m].hedefEnc - mevcutEnc;
-      st[m].kalanPulse = (unsigned long)abs(gercekFark);
       
       // ─────────────────────────────────────────────────────────
-      // ✅ HEDEFE ULAŞILDI MI? (TOLERANS: ±5 pulse)
+      // ✅ ATILAN PULSE'U GÜNCELLE (Kesin sayım)
       // ─────────────────────────────────────────────────────────
-      if (st[m].kalanPulse <= 5) {
-        // ✅ HEDEFE ULAŞILDI!
-        st[m].aktif = false;
-        st[m].bittiEdge = true;
-        st[m].faz = FAZ_KAPALI;
+      st[m].atilanPulse += st[m].sonSegmentPulse;
+      
+      // ─────────────────────────────────────────────────────────
+      // ✅ TÜM PULSE'LAR ATILDI MI? (Matematik olarak kesin!)
+      // ─────────────────────────────────────────────────────────
+      if (st[m].atilanPulse >= st[m].toplamPulse) {
         
-        // ✅ MOTORU FİZİKSEL OLARAK DURDUR
-        digitalWrite(enaPins[m], HIGH);
+        // ✅ İŞ BİTTİ - KESIN HEDEFE ULAŞILDI!
+        moveToDurdur(m);
+        st[m].bittiEdge = true;
+        
+        // ─────────────────────────────────────────────────────
+        // ✅ ENCODER KONTROLÜ (Bilgi amaçlı)
+        // ─────────────────────────────────────────────────────
+        long finalEnc = getEncoderPos(m);
+        long fark = st[m].hedefEnc - finalEnc;
+        
+        if (abs(fark) > 10) {
+          Serial.print(F("[MoveTo] Motor "));
+          Serial.print(m);
+          Serial.print(F(" sapma: "));
+          Serial.print(fark);
+          Serial.println(F("p (Encoder kayması)"));
+        }
         
         continue;
       }
       
       // ─────────────────────────────────────────────────────────
-      // FAZ GEÇİŞLERİ
+      // FAZ GEÇİŞLERİ (atılan pulse'a göre)
       // ─────────────────────────────────────────────────────────
-      unsigned long tamamlanan = st[m].toplamPulse - st[m].kalanPulse;
+      unsigned long rampaPulse = getRampaPulse(m);
       
       if (st[m].faz == FAZ_HIZLANMA) {
-        if (tamamlanan >= ACCEL_RAMP_PULSE) {
-          if (st[m].kalanPulse > ACCEL_RAMP_PULSE) {
+        if (st[m].atilanPulse >= rampaPulse) {
+          unsigned long kalan = st[m].toplamPulse - st[m].atilanPulse;
+          
+          if (kalan > rampaPulse) {
             st[m].faz = FAZ_SABIT_HIZ;
           } else {
             st[m].faz = FAZ_YAVASLAMA;
@@ -214,7 +276,9 @@ void moveToRun() {
         }
       }
       else if (st[m].faz == FAZ_SABIT_HIZ) {
-        if (st[m].kalanPulse <= ACCEL_RAMP_PULSE) {
+        unsigned long kalan = st[m].toplamPulse - st[m].atilanPulse;
+        
+        if (kalan <= rampaPulse) {
           st[m].faz = FAZ_YAVASLAMA;
         }
       }
@@ -222,12 +286,15 @@ void moveToRun() {
       // ─────────────────────────────────────────────────────────
       // SONRAKİ SEGMENTİ BAŞLAT
       // ─────────────────────────────────────────────────────────
-      unsigned int hiz = hesaplaHiz(&st[m]);
+      unsigned int hiz = hesaplaHiz(&st[m], m);
+      unsigned long kalan = st[m].toplamPulse - st[m].atilanPulse;
       unsigned long segmentPulse = hesaplaSegmentPulse(hiz);
       
-      if (segmentPulse > st[m].kalanPulse) {
-        segmentPulse = st[m].kalanPulse;
+      if (segmentPulse > kalan) {
+        segmentPulse = kalan;  // ← Son segment kırpılır
       }
+      
+      st[m].sonSegmentPulse = segmentPulse;
       
       useMotor(m);
       pulseAt(segmentPulse, st[m].yon, hiz);
@@ -261,7 +328,7 @@ long moveToKalan(uint8_t motorIndex) {
   if (motorIndex > 2) {
     return 0;
   }
-  return (long)st[motorIndex].kalanPulse;
+  return (long)(st[motorIndex].toplamPulse - st[motorIndex].atilanPulse);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -272,17 +339,15 @@ void moveToDurdur(uint8_t motorIndex) {
     return;
   }
   
-  // ✅ MOTORU FİZİKSEL OLARAK DURDUR
-  digitalWrite(enaPins[motorIndex], HIGH);
-  
-  // pulseAt'ı durdur
-  pulseAtDurdur(motorIndex);
-  
-  // Durumu temizle
+  // ✅ ÖNCE DURUMU TEMİZLE
   st[motorIndex].aktif = false;
   st[motorIndex].bittiEdge = false;
   st[motorIndex].faz = FAZ_KAPALI;
-  st[motorIndex].kalanPulse = 0;
+  st[motorIndex].atilanPulse = 0;
+  st[motorIndex].toplamPulse = 0;
+  
+  // ✅ SONRA PULSEAT'I DURDUR (içinde ENA HIGH yapıyor)
+  pulseAtDurdur(motorIndex);
 }
 
 void moveToHepsiniDurdur() {

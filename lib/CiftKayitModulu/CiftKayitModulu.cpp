@@ -122,7 +122,7 @@ void ckBaslat(long x1Enc, long x2Enc, int kayit1Yon, int kayit2Yon) {
   // [ADIM 1/7] X1'E GİT
   // ─────────────────────────────────────────────────────────────
   Serial.println(F("\n[ADIM 1/7] X1 pozisyonuna gidiliyor..."));
-  if (!moveTo(MOTOR_X, x1Hedef, 100)) {
+  if (!moveTo(MOTOR_X, x1Hedef, 5000)) {
     Serial.println(F("✗ X motor hareket başlatılamadı!"));
     return;
   }
@@ -235,7 +235,7 @@ void ckRun() {
           
           // [ADIM 5/7] X2'YE GİT
           Serial.println(F("[ADIM 5/7] X2 pozisyonuna gidiliyor..."));
-          if (!moveTo(MOTOR_X, x2Hedef, 100)) {
+          if (!moveTo(MOTOR_X, x2Hedef, 5000)) {
             Serial.println(F("✗ X motor hareket başlatılamadı!"));
             durum = CK_KAPALI;
             return;

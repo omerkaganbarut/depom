@@ -81,7 +81,7 @@ void coBaslat(long x1Enc, long x2Enc) {
   x2Hedef = x2Enc;
   globalA0Min = ckGlobalA0Min();
   globalA0Max = ckGlobalA0Max();
-  *zEncMaxPtr = (long)((globalA0Max - globalA0Min) * 16000L / 1023L);
+  *zEncMaxPtr = (long)((globalA0Max - globalA0Min) * 160000L / 1023L);
   
   Serial.print(F("  X1 Pozisyonu   : "));
   Serial.println(x1Hedef);
@@ -133,7 +133,7 @@ void coBaslat(long x1Enc, long x2Enc) {
     Serial.println();
     
     moveTo(MOTOR_B, bigA0Min, 100);
-    moveTo(MOTOR_X, xA0Min, 100);
+    moveTo(MOTOR_X, xA0Min, 2000);
     durum = CO_Z_SIFIRLAMA_HAZIRLIK;
   }
   else {

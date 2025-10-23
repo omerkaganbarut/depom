@@ -61,7 +61,7 @@
 // ═══════════════════════════════════════════════════════════════
 // KAYIT MODU PARAMETRELERİ
 // ═══════════════════════════════════════════════════════════════
-#define KAYIT_TOPLAM_PULSE   16000
+#define KAYIT_TOPLAM_PULSE   1600
 #define KAYIT_ARALIK         160
 #define KAYIT_HZ             80
 //#define KAYIT_YON            0   //değişken oldugu için modul içine taşındı
@@ -112,6 +112,22 @@
 
 // Home maksimum pulse (güvenlik - sonsuz döngü önleme)
 #define HOME_MAX_PULSE  10000
+
+// ═══════════════════════════════════════════════════════════════
+// MOTOR BAZLI İVME PARAMETRELERİ
+// ═══════════════════════════════════════════════════════════════
+
+// BIG Motor (Ağır yük, kısa mesafe)
+#define ACCEL_RAMP_BIG   400    // Kısa rampa (hızlı ivmelenme)
+#define MIN_SPEED_BIG    20     // Başlangıç hızı (Hz)
+
+// X Motor (Hafif, uzun mesafe)
+#define ACCEL_RAMP_X     5000   // Uzun rampa (yumuşak ivmelenme)
+#define MIN_SPEED_X      100     // Düşük başlangıç (Hz)
+
+// Z Motor (Torch, hassas)
+#define ACCEL_RAMP_Z     5000   // Çok uzun rampa (çok yumuşak)
+#define MIN_SPEED_Z      100     // Çok düşük başlangıç (Hz)
 
 // ═══════════════════════════════════════════════════════════════
 // NOTLAR
