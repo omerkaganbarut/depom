@@ -56,14 +56,14 @@
 // ═══════════════════════════════════════════════════════════════
 // SD KART
 // ═══════════════════════════════════════════════════════════════
-#define SD_CS_PIN   53  // SPI Chip Select (Mega için sabit)
+//#define SD_CS_PIN   53  // SPI Chip Select (Mega için sabit)
 
 // ═══════════════════════════════════════════════════════════════
 // KAYIT MODU PARAMETRELERİ
 // ═══════════════════════════════════════════════════════════════
-#define KAYIT_TOPLAM_PULSE   1600
-#define KAYIT_ARALIK         160
-#define KAYIT_HZ             80
+#define KAYIT_TOPLAM_PULSE   4000
+#define KAYIT_ARALIK         100
+#define KAYIT_HZ             200
 //#define KAYIT_YON            0   //değişken oldugu için modul içine taşındı
 #define KAYIT_ORNEK_SAYISI   (KAYIT_TOPLAM_PULSE / KAYIT_ARALIK + 1)
 
@@ -101,17 +101,17 @@
 #define LIMIT_B_PIN   TOGGLE3_PIN  // 24 - Motor BIG
 
 // Home yönleri (0=ileri, 1=geri)
-#define HOME_Z_DIR    1   // Z motoru geri giderek home'a ulaşır
-#define HOME_X_DIR    0   // X motoru ileri giderek home'a ulaşır
-#define HOME_B_DIR    1   // BIG motor geri giderek home'a ulaşır
+//#define HOME_Z_DIR    1   // Z motoru geri giderek home'a ulaşır
+//#define HOME_X_DIR    0   // X motoru ileri giderek home'a ulaşır
+//#define HOME_B_DIR    1   // BIG motor geri giderek home'a ulaşır
 
 // Home hızları (Hz)
-#define HOME_Z_HZ     30
-#define HOME_X_HZ     50
-#define HOME_B_HZ     40
+//#define HOME_Z_HZ     30
+//#define HOME_X_HZ     50
+//#define HOME_B_HZ     40
 
 // Home maksimum pulse (güvenlik - sonsuz döngü önleme)
-#define HOME_MAX_PULSE  10000
+//#define HOME_MAX_PULSE  10000
 
 // ═══════════════════════════════════════════════════════════════
 // MOTOR BAZLI İVME PARAMETRELERİ
@@ -122,11 +122,11 @@
 #define MIN_SPEED_BIG    20     // Başlangıç hızı (Hz)
 
 // X Motor (Hafif, uzun mesafe)
-#define ACCEL_RAMP_X     5000   // Uzun rampa (yumuşak ivmelenme)
+#define ACCEL_RAMP_X     6000   // Uzun rampa (yumuşak ivmelenme)
 #define MIN_SPEED_X      100     // Düşük başlangıç (Hz)
 
 // Z Motor (Torch, hassas)
-#define ACCEL_RAMP_Z     5000   // Çok uzun rampa (çok yumuşak)
+#define ACCEL_RAMP_Z     6000   // Çok uzun rampa (çok yumuşak)
 #define MIN_SPEED_Z      100     // Çok düşük başlangıç (Hz)
 
 // ═══════════════════════════════════════════════════════════════
