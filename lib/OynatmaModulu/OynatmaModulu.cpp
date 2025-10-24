@@ -193,7 +193,11 @@ void oynatmaRun() {
         Serial.print(bigEnc->getPosition());
         Serial.print(F(" | Z: "));
         Serial.println(zEnc->getPosition());
-        
+        Serial.println(); 
+
+        //xsBaslat(x1Pos, 3000, 1000);
+
+
         idx = 1;
         durum = OYNATMA_SEGMENT_HESAPLA;
       }

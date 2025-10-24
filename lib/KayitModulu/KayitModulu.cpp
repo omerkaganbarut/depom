@@ -154,63 +154,64 @@ void kayitRun() {
     
     // ───────────────────────────────────────────────────────────
     case KAYIT_ORNEK_AL:
+  // Örnek alındı
+  samples[idx].enc = bigEnc->getPosition();
+  samples[idx].a0 = a0FiltreliOku();
+  
+  Serial.print(F(" → ["));
+  Serial.print(idx);
+  Serial.print(F("] enc="));
+  Serial.print(samples[idx].enc);
+  Serial.print(F(", a0="));
+  Serial.println(samples[idx].a0);
+  
+  // Son örnek mi?
+  if (idx >= KAYIT_ORNEK_SAYISI - 1) {
+    durum = KAYIT_TAMAMLANDI;
+    Serial.println(F("\n[KAYIT] Tamamlandı! ✓\n"));
+  }
+  else {
+    // ═══════════════════════════════════════════════════════════
+    // ✅ SONRAKI SEGMENT: YÖN BAZLI HEDEF HESAPLAMA
+    // ═══════════════════════════════════════════════════════════
+    idx++;
+    
+    long mevcutEnc = bigEnc->getPosition();
+    long sonrakiTeoriHedef;
+    
     // ───────────────────────────────────────────────────────────
-      // Encoder ve A0 oku
-      samples[idx].enc = bigEnc->getPosition();
-      samples[idx].a0 = a0FiltreliOku();
-      
-      // Rapor
-      Serial.print(F(" → ["));
-      Serial.print(idx);
-      Serial.print(F("] enc="));
-      Serial.print(samples[idx].enc);
-      Serial.print(F(", a0="));
-      Serial.println(samples[idx].a0);
-      
-      // Son örnek mi?
-      if (idx >= KAYIT_ORNEK_SAYISI - 1) {
-        durum = KAYIT_TAMAMLANDI;
-        Serial.println(F("\n[KAYIT] Tamamlandı! ✓\n"));
-      }
-      else {
-        // Sonraki segment
-        idx++;
-        
-        Serial.print(F("[SEG "));
-        Serial.print(idx - 1);
-        Serial.print(F("→"));
-        Serial.print(idx);
-        Serial.print(F("]"));
-        
-        // ═════════════════════════════════════════════════════
-        // OTOMATİK DÜZELTİLMİŞ SEGMENT
-        // ═════════════════════════════════════════════════════
-        long mevcutEnc = bigEnc->getPosition();  // Gerçek pozisyon
-        long sonrakiTeoriHedef = baslangicEnc + (KAYIT_ARALIK * idx);  // Teorik hedef
-        long gerekliFark = sonrakiTeoriHedef - mevcutEnc;  // Gerekli hareket
-        
-        unsigned long pulseSayisi = (unsigned long)abs(gerekliFark);
-        int yon = (gerekliFark > 0) ? 0 : 1;  // Yön belirle
-        
-        // Debug bilgisi
-        if (pulseSayisi != KAYIT_ARALIK) {
-          Serial.print(F(" ("));
-          Serial.print(pulseSayisi);
-          Serial.print(F("p"));
-          if (yon != kayitYon) {
-            Serial.print(F(", "));
-            Serial.print(yon ? F("geri") : F("ileri"));
-          }
-          Serial.print(F(")"));
-        }
-        
-        // Segment başlat
-        useMotor(MOTOR_B);
-        pulseAt(pulseSayisi, yon, (unsigned int)KAYIT_HZ);
-        
-        durum = KAYIT_MOTOR_BEKLE;
-      }
-      break;
+    // YÖN KONTROLÜ
+    // ───────────────────────────────────────────────────────────
+    if (kayitYon == 0) {
+      // İLERİ: baslangicEnc'den uzaklaş (artır)
+      sonrakiTeoriHedef = baslangicEnc + (KAYIT_ARALIK * idx);
+    }
+    else {
+      // GERİ: baslangicEnc'den uzaklaş (azalt)
+      sonrakiTeoriHedef = baslangicEnc - (KAYIT_ARALIK * idx);
+    }
+    
+    long gerekliFark = sonrakiTeoriHedef - mevcutEnc;
+    unsigned long pulseSayisi = (unsigned long)abs(gerekliFark);
+    int yon = (gerekliFark > 0) ? 0 : 1;
+    
+    // ───────────────────────────────────────────────────────────
+    // DEBUG: Yön değişimi uyarısı
+    // ───────────────────────────────────────────────────────────
+    if (yon != kayitYon) {
+      Serial.print(F("  ⚠ Yön değişti! Kayıt yönü: "));
+      Serial.print(kayitYon ? F("Geri") : F("İleri"));
+      Serial.print(F(" | Hesaplanan: "));
+      Serial.println(yon ? F("Geri") : F("İleri"));
+    }
+    
+    // Segment başlat
+    useMotor(MOTOR_B);
+    pulseAt(pulseSayisi, yon, (unsigned int)KAYIT_HZ);
+    
+    durum = KAYIT_MOTOR_BEKLE;
+  }
+  break;
     
     // ───────────────────────────────────────────────────────────
     case KAYIT_TAMAMLANDI:
