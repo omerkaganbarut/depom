@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include "stepmotorenkoderiokuma.h"
+#include "Config.h"
 
 // ═══════════════════════════════════════════════════════════════
 // KAYIT VERİ YAPISI
@@ -12,6 +13,12 @@ struct CK_Sample {
   long enc;      // BIG encoder pozisyonu
   uint16_t a0;   // A0 sensör değeri
 };
+
+// ═══════════════════════════════════════════════════════════════
+// ✅ EXTERN KAYIT ARRAYLERI (CiftOynatmaModulu erişebilir)
+// ═══════════════════════════════════════════════════════════════
+extern CK_Sample kayit1[KAYIT_ORNEK_SAYISI];
+extern CK_Sample kayit2[KAYIT_ORNEK_SAYISI];
 
 // ═══════════════════════════════════════════════════════════════
 // FONKSİYON TANIMLARI
@@ -53,26 +60,6 @@ bool ckAktifMi();
 bool ckTamamlandiMi();
 
 /**
- * @brief Global A0 minimum değerini al
- */
-uint16_t ckGlobalA0Min();
-
-/**
- * @brief Global A0 maximum değerini al
- */
-uint16_t ckGlobalA0Max();
-
-/**
- * @brief Kayıt1 verilerine eriş (read-only)
- */
-const CK_Sample* ckKayit1Verileri();
-
-/**
- * @brief Kayıt2 verilerine eriş (read-only)
- */
-const CK_Sample* ckKayit2Verileri();
-
-/**
  * @brief Kayıt1 verilerini listele (Serial'e yazdır)
  */
 void ckKayit1Listele();
@@ -86,5 +73,11 @@ void ckKayit2Listele();
  * @brief Çift kayıt işlemini durdur (acil durdurma)
  */
 void ckDurdur();
+
+// CiftKayitModulu.h dosyasına ekle:
+
+// Global A0 aralığı (extern - başka modüller kullanabilir)
+extern uint16_t globalA0Min;
+extern uint16_t globalA0Max;
 
 #endif // CIFTKAYITMODULU_H

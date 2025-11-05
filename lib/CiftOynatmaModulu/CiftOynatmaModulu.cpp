@@ -1,465 +1,614 @@
-// CiftOynatmaModulu.cpp - İKİ KAYDI SIRAYLA OYNATMA + GÜVENLİKLİ GEÇİŞ
+// CiftOynatmaModulu.cpp - v8.0 Y/N ONAY SİSTEMİ
+// ═══════════════════════════════════════════════════════════════
+// ✅ DÜZELTMELER:
+// 1. Kayıt1 oynatılmadan önce Y/N onayı
+// 2. Kayıt2 oynatılmadan önce Y/N onayı
+// 3. Z sıfırlama MANUEL TORCH SÜRME (Y/N ile)
+// 4. Döngü hataları giderildi (moveTo tek seferlik)
+// 5. Global A0_min pozisyonunda kullanıcı torch'u sürebilir
+// ═══════════════════════════════════════════════════════════════
+
 #include "CiftOynatmaModulu.h"
-#include "Config.h"
 #include "CiftKayitModulu.h"
 #include "OynatmaModulu.h"
 #include "MoveTo.h"
-#include "KayitModulu.h"
+#include "PulseAt.h"
+#include "A0Filtre.h"
+#include "Config.h"
+#include <Arduino.h>
+#include "MoveSalinim.h"
 
-enum CODurum {
+// ═══════════════════════════════════════════════════════════════
+// DURUMLAR
+// ═══════════════════════════════════════════════════════════════
+enum CiftOynatmaDurum {
   CO_KAPALI = 0,
-  CO_Z_SIFIRLAMA_HAZIRLIK,
-  CO_Z_SIFIRLAMA_ONAY,
-  CO_SIFIR_KONUMUNA_GIT,
-  CO_SIFIR_ONAY,
-  CO_K1_GECIS_Z_YUKARI,
-  CO_K1_GECIS_BIG_X,
-  CO_K1_GECIS_Z_ASAGI,
-  CO_K1_OYNATILIYOR,
-  CO_K2_GECIS_Z_YUKARI,
-  CO_K2_GECIS_BIG_X,
-  CO_K2_GECIS_Z_ASAGI,
-  CO_K2_OYNATILIYOR,
-  CO_TAMAMLANDI
+  
+  // Z SIFIRLAMA (MANUEL TORCH SÜRME)
+  CO_Z_SIFIRLAMA_A0MIN_BASLA,
+  CO_Z_SIFIRLAMA_A0MIN_BEKLE,
+  CO_Z_SIFIRLAMA_KONTROL,      // ← Y/N bekle (kullanıcı manuel sürer)
+  CO_Z_SIFIRLAMA_YUKARI_BASLA,
+  CO_Z_SIFIRLAMA_YUKARI_BEKLE,
+  
+  // KAYIT1 GEÇİŞİ
+  CO_K1_GECIS_BASLA,
+  CO_K1_GECIS_BEKLE,
+  CO_K1_Z_ASAGI_BASLA,
+  CO_K1_Z_ASAGI_BEKLE,
+  
+  // KAYIT1 OYNATMA
+  CO_K1_OYNAT_ONAY_BEKLE,  // ← YENİ: Kayıt1 oynatma onayı
+  CO_K1_OYNAT,
+  
+  // KAYIT2 GEÇİŞİ
+  CO_K2_Z_YUKARI_BASLA,
+  CO_K2_Z_YUKARI_BEKLE,
+  CO_K2_XB_BASLA,
+  CO_K2_XB_BEKLE,
+  CO_K2_Z_ASAGI_BASLA,
+  CO_K2_Z_ASAGI_BEKLE,
+  
+  // KAYIT2 OYNATMA
+  CO_K2_OYNAT_ONAY_BEKLE,  // ← YENİ: Kayıt2 oynatma onayı
+  CO_K2_OYNAT,
+  
+  CO_BITTI
 };
 
-static CODurum durum = CO_KAPALI;
-static bool zSifirlandiMi = false;
+// ═══════════════════════════════════════════════════════════════
+// GLOBAL DEĞİŞKENLER
+// ═══════════════════════════════════════════════════════════════
+static CiftOynatmaDurum durum = CO_KAPALI;
+
 static StepMotorEncoder* bigEnc = nullptr;
 static StepMotorEncoder* xEnc = nullptr;
 static StepMotorEncoder* zEnc = nullptr;
+
+static long* bigFreqMin_ptr = nullptr;
+static long* bigFreqMax_ptr = nullptr;
+static long* zEncMin_ptr = nullptr;
+static long* zEncMax_ptr = nullptr;
+
 static long x1Hedef = 0;
 static long x2Hedef = 0;
-static uint16_t globalA0Min = 0;
-static uint16_t globalA0Max = 0;
-static long* bigFreqMinPtr = nullptr;
-static long* bigFreqMaxPtr = nullptr;
-static long* zEncMinPtr = nullptr;
-static long* zEncMaxPtr = nullptr;
 
-static long mapA0ToZ(uint16_t a0Val) {
-  if (globalA0Max == globalA0Min) return *zEncMinPtr;
-  int64_t num = (int64_t)(a0Val - globalA0Min) * (int64_t)(*zEncMaxPtr - *zEncMinPtr);
-  int64_t den = (int64_t)(globalA0Max - globalA0Min);
-  return *zEncMinPtr + (long)(num / den);
-}
+static bool zSifirlamaTamamlandi = false;
 
-void coEncoderSetup(StepMotorEncoder* bigEncoder, StepMotorEncoder* xEncoder, StepMotorEncoder* zEncoder) {
+// A0_MIN pozisyonu
+static long bigPosAtA0Min = 0;
+static long xPosAtA0Min = 0;
+
+// EXTERN: GLOBAL A0 MIN/MAX
+extern uint16_t globalA0Min;
+extern uint16_t globalA0Max;
+
+// ═══════════════════════════════════════════════════════════════
+// ENCODER SETUP
+// ═══════════════════════════════════════════════════════════════
+void coEncoderSetup(StepMotorEncoder* bigEncoder, 
+                    StepMotorEncoder* xEncoder,
+                    StepMotorEncoder* zEncoder) {
   bigEnc = bigEncoder;
   xEnc = xEncoder;
   zEnc = zEncoder;
 }
 
-void coParametreSetup(long* bigFreqMin, long* bigFreqMax, long* zEncMin, long* zEncMax) {
-  bigFreqMinPtr = bigFreqMin;
-  bigFreqMaxPtr = bigFreqMax;
-  zEncMinPtr = zEncMin;
-  zEncMaxPtr = zEncMax;
+// ═══════════════════════════════════════════════════════════════
+// PARAMETRE SETUP
+// ═══════════════════════════════════════════════════════════════
+void coParametreSetup(long* bigFreqMin, long* bigFreqMax, 
+                      long* zEncMin, long* zEncMax) {
+  bigFreqMin_ptr = bigFreqMin;
+  bigFreqMax_ptr = bigFreqMax;
+  zEncMin_ptr = zEncMin;
+  zEncMax_ptr = zEncMax;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// HELPER: GLOBAL A0 ARALIĞINA GÖRE Z MAX HESAPLA
+// ═══════════════════════════════════════════════════════════════
+static inline long hesaplaZMax() {
+  // Global A0 ARALIĞININ fiziksel Z karşılığı
+  // Örnek: globalA0Min=300, globalA0Max=600
+  //        Aralık = 600-300 = 300
+  //        Z Max = (300/1023) × 160000 = 46,950
+  
+  if (globalA0Max <= globalA0Min) return Z_ENCODER_MAX;
+  
+  // A0 aralığı
+  uint16_t a0Aralik = globalA0Max - globalA0Min;
+  
+  // A0 aralık oranı × Z_ENCODER_MAX
+  float oran = (float)a0Aralik / 1023.0;
+  long zMax = (long)(oran * Z_ENCODER_MAX);
+  
+  // Güvenlik kontrolü
+  if (zMax > Z_ENCODER_MAX) zMax = Z_ENCODER_MAX;
+  if (zMax < 1000) zMax = 1000;  // Minimum 1000 encoder
+  
+  return zMax;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: A0 → Z ENCODER MAPPING
+// ═══════════════════════════════════════════════════════════════
+static inline long mapA0ToZEnc(uint16_t a0) {
+  if (a0 <= globalA0Min) return 0;
+  
+  // ✅ Dinamik Z max hesapla
+  long zMax = hesaplaZMax();
+  
+  if (a0 >= globalA0Max) return zMax;
+  
+  // globalA0Min → 0, globalA0Max → zMax
+  return map(a0, globalA0Min, globalA0Max, 0, zMax);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: A0_MIN POZİSYONUNU BUL
+// ═══════════════════════════════════════════════════════════════
+static void hesaplaA0MinPozisyonu() {
+  Serial.println(F("\n[CO] Sıfırlama pozisyonu aranıyor..."));
+  Serial.print(F("  Global A0 Min: ")); Serial.println(globalA0Min);
+  
+  bigPosAtA0Min = __LONG_MAX__;
+  xPosAtA0Min = __LONG_MAX__;
+  
+  // Kayıt1'de ara
+  for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
+    if (kayit1[i].a0 == globalA0Min) {
+      bigPosAtA0Min = kayit1[i].enc;
+      xPosAtA0Min = x1Hedef;
+      
+      Serial.print(F("  ✓ Kayıt1["));
+      Serial.print(i);
+      Serial.print(F("]: bigEnc="));
+      Serial.print(bigPosAtA0Min);
+      Serial.print(F(", xEnc="));
+      Serial.println(xPosAtA0Min);
+      break;
+    }
+  }
+  
+  // Kayıt2'de ara
+  if (bigPosAtA0Min == __LONG_MAX__) {
+    for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
+      if (kayit2[i].a0 == globalA0Min) {
+        bigPosAtA0Min = kayit2[i].enc;
+        xPosAtA0Min = x2Hedef;
+        
+        Serial.print(F("  ✓ Kayıt2["));
+        Serial.print(i);
+        Serial.print(F("]: bigEnc="));
+        Serial.print(bigPosAtA0Min);
+        Serial.print(F(", xEnc="));
+        Serial.println(xPosAtA0Min);
+        break;
+      }
+    }
+  }
+  
+  if (bigPosAtA0Min == __LONG_MAX__) {
+    Serial.println(F("✗ HATA: globalA0Min pozisyonu bulunamadı!"));
+    durum = CO_KAPALI;
+    return;
+  }
+  
+  Serial.println(F("[CO] Sıfırlama pozisyonu bulundu!"));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BAŞLATMA
+// ═══════════════════════════════════════════════════════════════
 void coBaslat(long x1Enc, long x2Enc) {
+  x1Hedef = x1Enc;
+  x2Hedef = x2Enc;
+  
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
   Serial.println(F("║          ÇİFT OYNATMA BAŞLATILIYOR             ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝\n"));
   
-  if (!ckTamamlandiMi()) {
-    Serial.println(F("✗ Hata: Çift kayıt tamamlanmamış!"));
-    return;
-  }
+  hesaplaA0MinPozisyonu();
   
-  if (bigEnc == nullptr || xEnc == nullptr || zEnc == nullptr) {
-    Serial.println(F("✗ Hata: Encoder'lar ayarlanmamış!\n"));
-    return;
-  }
-  
-  if (bigFreqMinPtr == nullptr || zEncMaxPtr == nullptr) {
-    Serial.println(F("✗ Hata: Parametreler ayarlanmamış!\n"));
-    return;
-  }
-  
-  x1Hedef = x1Enc;
-  x2Hedef = x2Enc;
-  globalA0Min = ckGlobalA0Min();
-  globalA0Max = ckGlobalA0Max();
-  *zEncMaxPtr = (long)((globalA0Max - globalA0Min) * 160000L / 1023L);
-  
-  Serial.print(F("  X1 Pozisyonu   : "));
-  Serial.println(x1Hedef);
-  Serial.print(F("  X2 Pozisyonu   : "));
-  Serial.println(x2Hedef);
-  Serial.print(F("  Global A0_min  : "));
-  Serial.println(globalA0Min);
-  Serial.print(F("  Global A0_max  : "));
-  Serial.println(globalA0Max);
-  Serial.print(F("  Z Enc Max      : "));
-  Serial.println(*zEncMaxPtr);
-  Serial.println();
-  
-  if (!zSifirlandiMi) {
-    const CK_Sample* kayit1 = ckKayit1Verileri();
-    const CK_Sample* kayit2 = ckKayit2Verileri();
-    long bigA0Min = 0;
-    long xA0Min = x1Hedef;
-    
-    for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-      if (kayit1[i].a0 == globalA0Min) {
-        bigA0Min = kayit1[i].enc;
-        xA0Min = x1Hedef;
-        break;
-      }
-    }
-    
-    if (bigA0Min == 0) {
-      for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-        if (kayit2[i].a0 == globalA0Min) {
-          bigA0Min = kayit2[i].enc;
-          xA0Min = x2Hedef;
-          break;
-        }
-      }
-    }
-    
-    Serial.println(F("[ADIM 1] Z Sıfırlama Hazırlığı (İlk Depo)"));
-    Serial.println(F("───────────────────────────────────────────────"));
-    Serial.print(F("  BIG & X → A0_min konumuna gidiyor...\n"));
-    Serial.print(F("  BIG: "));
-    Serial.print(bigEnc->getPosition());
-    Serial.print(F(" → "));
-    Serial.println(bigA0Min);
-    Serial.print(F("  X  : "));
-    Serial.print(xEnc->getPosition());
-    Serial.print(F(" → "));
-    Serial.println(xA0Min);
-    Serial.println();
-    
-    moveTo(MOTOR_B, bigA0Min, 100);
-    moveTo(MOTOR_X, xA0Min, 2000);
-    durum = CO_Z_SIFIRLAMA_HAZIRLIK;
-  }
-  else {
-    const CK_Sample* kayit1 = ckKayit1Verileri();
-    long bigHedef = kayit1[0].enc;
-    
-    Serial.println(F("[ADIM 1] Başlangıç Konumuna Git (Yeni Depo)"));
-    Serial.println(F("───────────────────────────────────────────────"));
-    Serial.print(F("  BIG: "));
-    Serial.print(bigEnc->getPosition());
-    Serial.print(F(" → "));
-    Serial.println(bigHedef);
-    Serial.print(F("  X  : "));
-    Serial.print(xEnc->getPosition());
-    Serial.print(F(" → "));
-    Serial.println(x1Hedef);
-    Serial.println();
-    
-    moveTo(MOTOR_B, bigHedef, 100);
-    moveTo(MOTOR_X, x1Hedef, 100);
-    durum = CO_SIFIR_KONUMUNA_GIT;
+  if (!zSifirlamaTamamlandi) {
+    Serial.println(F("[CO] Z sıfırlama başlıyor (MANUEL TORCH SÜRME)..."));
+    durum = CO_Z_SIFIRLAMA_A0MIN_BASLA;
+  } else {
+    Serial.println(F("[CO] Z zaten sıfır. Kayıt1 geçişi başlıyor..."));
+    durum = CO_K1_GECIS_BASLA;
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ÇALIŞMA DÖNGÜSÜ
+// ═══════════════════════════════════════════════════════════════
 void coRun() {
+  if (!bigEnc || !xEnc || !zEnc) return;
+  if (durum == CO_KAPALI || durum == CO_BITTI) return;
+  
   switch (durum) {
-    case CO_KAPALI:
-      return;
     
-    case CO_Z_SIFIRLAMA_HAZIRLIK:
-      if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {
-        Serial.println(F("✓ A0_min konumuna ulaşıldı!\n"));
-        Serial.print(F("  BIG: "));
-        Serial.println(bigEnc->getPosition());
-        Serial.print(F("  X  : "));
-        Serial.println(xEnc->getPosition());
-        Serial.println(F("\n[ADIM 2] Manuel Torch Sürme"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.println(F("  Bu nokta en düşük A0 değerinin olduğu yer."));
-        Serial.println(F("  Torcu manuel olarak (M, P komutları ile)"));
-        Serial.println(F("  yüzeye yaklaştırın.\n"));
-        Serial.println(F("  Torch yüzeye değdiğinde 'Y' tuşlayın."));
-        Serial.println(F("  (Z encoder sıfırlanacak: Z=0)"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.print(F("  > Hazır mısınız? (Y/N): "));
-        durum = CO_Z_SIFIRLAMA_ONAY;
-      }
-      break;
+    // ═══════════════════════════════════════════════════════════
+    // Z SIFIRLAMA (MANUEL TORCH SÜRME)
+    // ═══════════════════════════════════════════════════════════
     
-    case CO_Z_SIFIRLAMA_ONAY:
-      if (Serial.available()) {
-        char c = Serial.read();
-        if (c == 'Y' || c == 'y') {
-          Serial.println(F("Y\n"));
-          zEnc->reset();
-          zSifirlandiMi = true;
-          Serial.println(F("✓ Z encoder sıfırlandı! (Z = 0)"));
-          Serial.println(F("  Bu nokta artık kalıcı referans.\n"));
-          Serial.println(F("[ADIM 3] Kayıt1 Geçişi: Z Yukarı"));
-          Serial.println(F("───────────────────────────────────────────────"));
-          long zMaxPos = mapA0ToZ(globalA0Max);
-          Serial.print(F("  Z: 0 → "));
-          Serial.print(zMaxPos);
-          Serial.println(F(" (Güvenlik - Yukarı)"));
-          moveTo(MOTOR_Z, zMaxPos, 2000);
-          durum = CO_K1_GECIS_Z_YUKARI;
-        }
-        else if (c == 'N' || c == 'n') {
-          Serial.println(F("N\n"));
-          Serial.println(F("✗ Çift oynatma iptal edildi!\n"));
-          durum = CO_KAPALI;
-        }
-      }
-      break;
+    case CO_Z_SIFIRLAMA_A0MIN_BASLA:
+    {
+      Serial.println(F("[CO] Z Sıfırlama: Global A0_min pozisyonuna gidiliyor..."));
+      Serial.print(F("  BIG: ")); Serial.println(bigPosAtA0Min);
+      Serial.print(F("  X  : ")); Serial.println(xPosAtA0Min);
+      
+      moveTo(MOTOR_B, bigPosAtA0Min, 200,false);
+      moveTo(MOTOR_X, xPosAtA0Min, 10000,false);
+      //moveTo(MOTOR_Z, 100000, 10000); //DENEME
+      
+      durum = CO_Z_SIFIRLAMA_A0MIN_BEKLE;
+    }
+    break;
     
-    case CO_SIFIR_KONUMUNA_GIT:
-      if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {
-        Serial.println(F("✓ Başlangıç konumuna ulaşıldı!\n"));
-        Serial.print(F("  BIG: "));
-        Serial.println(bigEnc->getPosition());
-        Serial.print(F("  X  : "));
-        Serial.println(xEnc->getPosition());
-        Serial.println(F("\n[ADIM 2] Konum Onayı"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.println(F("  Motorlar Kayıt1'in başlangıç konumunda."));
-        Serial.println(F("  Görsel kontrol yapın.\n"));
-        Serial.println(F("  Konum doğru mu? (Y/N)"));
-        Serial.println(F("───────────────────────────────────────────────"));
+    case CO_Z_SIFIRLAMA_A0MIN_BEKLE:
+    {
+      // ✅ Motorlar durdu mu kontrol et (aktif değil mi?)
+      bool xDurdu = !moveToAktifMi(MOTOR_X);
+      bool bigDurdu = !moveToAktifMi(MOTOR_B);
+      //bool zDurdu = !moveToAktifMi(MOTOR_Z);
+      
+      if (xDurdu && bigDurdu ) {
+        pulseAtDurdur(MOTOR_X);
+        pulseAtDurdur(MOTOR_B);
+        //pulseAtDurdur(MOTOR_Z);
+        
+        Serial.println(F("[CO] ✓ Global A0_min pozisyonunda!"));
+        Serial.println(F("─────────────────────────────────────────────"));
+        Serial.println(F("  🔧 MANUEL TORCH SÜRME MODU"));
+        Serial.println(F("─────────────────────────────────────────────"));
+        Serial.println(F("  Bu konumda torch'u Z ekseninde yere değdirin."));
+        Serial.println(F("  Main menüden Z motor komutlarını kullanabilirsiniz."));
+        Serial.println();
+        Serial.println(F("  Torch yere değdiğinde:"));
+        Serial.println(F("    Y → Z encoder'ı sıfırla ve devam et"));
+        Serial.println(F("    N → İptal"));
         Serial.print(F("  > "));
-        durum = CO_SIFIR_ONAY;
+        
+        durum = CO_Z_SIFIRLAMA_KONTROL;
       }
-      break;
+    }
+    break;
     
-    case CO_SIFIR_ONAY:
-      if (Serial.available()) {
-        char c = Serial.read();
+    case CO_Z_SIFIRLAMA_KONTROL:
+    {
+      // Y/N bekle (main.cpp'den manuel sürme sırasında)
+      if (Serial.available() > 0) {
+        char c = Serial.peek();
+        
         if (c == 'Y' || c == 'y') {
+          Serial.read();
           Serial.println(F("Y\n"));
-          Serial.println(F("✓ Onaylandı! Oynatma başlıyor...\n"));
-          Serial.println(F("[ADIM 3] Kayıt1 Geçişi: Z Aşağı"));
-          Serial.println(F("───────────────────────────────────────────────"));
-          const CK_Sample* kayit1 = ckKayit1Verileri();
-          long zHedef = mapA0ToZ(kayit1[0].a0);
-          Serial.print(F("  Z: "));
+          
+          Serial.println(F("  ✓ Z encoder sıfırlanıyor..."));
+          
+          zEnc->reset();  // ← Artık Z=0 bu A0_min noktası
+          
+          Serial.print(F("  ✓ Z=0 ayarlandı! (Mevcut Z: "));
           Serial.print(zEnc->getPosition());
-          Serial.print(F(" → "));
-          Serial.print(zHedef);
-          Serial.print(F(" (A0="));
-          Serial.print(kayit1[0].a0);
           Serial.println(F(")"));
-          moveTo(MOTOR_Z, zHedef, 2000);
-          durum = CO_K1_GECIS_Z_ASAGI;
+          
+          Serial.println(F("  Z yukarı çıkıyor..."));
+          
+          durum = CO_Z_SIFIRLAMA_YUKARI_BASLA;
         }
         else if (c == 'N' || c == 'n') {
+          Serial.read();
           Serial.println(F("N\n"));
-          Serial.println(F("✗ Çift oynatma iptal edildi!\n"));
+          
+          Serial.println(F("  ✗ Çift oynatma iptal edildi!"));
+          
           durum = CO_KAPALI;
         }
       }
-      break;
+    }
+    break;
     
-    case CO_K1_GECIS_Z_YUKARI:
-      if (moveToBittiMi(MOTOR_Z)) {
-        Serial.print(F("  ✓ Z yukarıda: "));
-        Serial.println(zEnc->getPosition());
-        Serial.println(F("\n[ADIM 4] Kayıt1 Geçişi: BIG & X Hareket"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit1 = ckKayit1Verileri();
-        long bigHedef = kayit1[0].enc;
-        Serial.print(F("  BIG: "));
-        Serial.print(bigEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.println(bigHedef);
-        Serial.print(F("  X  : "));
-        Serial.print(xEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.println(x1Hedef);
-        Serial.println();
-        moveTo(MOTOR_B, bigHedef, 100);
-        moveTo(MOTOR_X, x1Hedef, 100);
-        durum = CO_K1_GECIS_BIG_X;
+    case CO_Z_SIFIRLAMA_YUKARI_BASLA:
+    {
+      // ✅ Global A0 aralığına göre Z max hesapla
+      long zHedef = hesaplaZMax();
+      
+      Serial.print(F("  Global A0 Min: ")); Serial.println(globalA0Min);
+      Serial.print(F("  Global A0 Max: ")); Serial.println(globalA0Max);
+      Serial.print(F("  A0 Aralığı: ")); Serial.println(globalA0Max - globalA0Min);
+      Serial.print(F("  Hesaplanan Z Max: ")); Serial.println(zHedef);
+      
+      moveTo(MOTOR_Z, zHedef, 10000,false);
+      
+      durum = CO_Z_SIFIRLAMA_YUKARI_BEKLE;
+    }
+    break;
+    
+    case CO_Z_SIFIRLAMA_YUKARI_BEKLE:
+    {
+      if (!moveToAktifMi(MOTOR_Z)) {
+        pulseAtDurdur(MOTOR_Z);
+        
+        Serial.println(F("[CO] ✓ Z sıfırlama tamamlandı!"));
+        zSifirlamaTamamlandi = true;
+        
+        durum = CO_K1_GECIS_BASLA;
       }
-      break;
+    }
+    break;
     
-    case CO_K1_GECIS_BIG_X:
-      if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {
-        Serial.println(F("  ✓ Kayıt1[0] konumunda"));
-        Serial.print(F("    BIG: "));
-        Serial.println(bigEnc->getPosition());
-        Serial.print(F("    X  : "));
-        Serial.println(xEnc->getPosition());
-        Serial.println(F("\n[ADIM 5] Kayıt1 Geçişi: Z Aşağı"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit1 = ckKayit1Verileri();
-        long zHedef = mapA0ToZ(kayit1[0].a0);
-        Serial.print(F("  Z: "));
-        Serial.print(zEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.print(zHedef);
-        Serial.print(F(" (A0="));
-        Serial.print(kayit1[0].a0);
-        Serial.println(F(")"));
-        moveTo(MOTOR_Z, zHedef, 2000);
-        durum = CO_K1_GECIS_Z_ASAGI;
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT1 GEÇİŞİ
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K1_GECIS_BASLA:
+    {
+      Serial.println(F("[CO] Kayıt1 Geçişi: Z yukarı → BIG+X → Kayıt1[0]"));
+      
+      // ✅ Z yukarı (global A0 max'a göre)
+      long zHedef = hesaplaZMax();
+      moveTo(MOTOR_Z, zHedef, 10000,false);
+      
+      // BIG+X → Kayıt1[0]
+      moveTo(MOTOR_B, kayit1[0].enc, 200,false);
+      moveTo(MOTOR_X, x1Hedef, 10000,false);
+      
+      durum = CO_K1_GECIS_BEKLE;
+    }
+    break;
+    
+    case CO_K1_GECIS_BEKLE:
+    {
+      bool zDurdu = !moveToAktifMi(MOTOR_Z);
+      bool xDurdu = !moveToAktifMi(MOTOR_X);
+      bool bigDurdu = !moveToAktifMi(MOTOR_B);
+      
+      if (zDurdu && xDurdu && bigDurdu) {
+        pulseAtDurdur(MOTOR_Z);
+        pulseAtDurdur(MOTOR_X);
+        pulseAtDurdur(MOTOR_B);
+        
+        Serial.println(F("[CO] ✓ Kayıt1[0] pozisyonu. Z iniyor..."));
+        
+        durum = CO_K1_Z_ASAGI_BASLA;
       }
-      break;
+    }
+    break;
     
-    case CO_K1_GECIS_Z_ASAGI:
-      if (moveToBittiMi(MOTOR_Z)) {
-        Serial.print(F("  ✓ Z başlangıç konumunda: "));
-        Serial.println(zEnc->getPosition());
-        Serial.println(F("\n[ADIM 6] Kayıt1 Oynatma"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit1 = ckKayit1Verileri();
-        KM_Sample* oynatmaBuffer = kayitVerileriDuzenle();
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          oynatmaBuffer[i].enc = kayit1[i].enc;
-          oynatmaBuffer[i].a0 = kayit1[i].a0;
+    case CO_K1_Z_ASAGI_BASLA:
+    {
+      // Z → Kayıt1[0].a0
+      uint16_t a0Hedef = kayit1[0].a0;
+      long zHedef = mapA0ToZEnc(a0Hedef);
+      
+      Serial.print(F("  Z → ")); Serial.println(zHedef);
+      
+      moveTo(MOTOR_Z, zHedef, 3000,false);
+      
+      durum = CO_K1_Z_ASAGI_BEKLE;
+    }
+    break;
+    
+    case CO_K1_Z_ASAGI_BEKLE:
+    {
+      if (!moveToAktifMi(MOTOR_Z)) {
+        pulseAtDurdur(MOTOR_Z);
+        
+        Serial.println(F("[CO] ✓ Kayıt1 başlangıç pozisyonu hazır!"));
+        Serial.println(F("\n[CO] ╔════════════════════════════════════════╗"));
+        Serial.println(F("[CO] ║  Kayıt1 oynatılsın mı? (Y/N)         ║"));
+        Serial.println(F("[CO] ╚════════════════════════════════════════╝"));
+        
+        durum = CO_K1_OYNAT_ONAY_BEKLE;
+      }
+    }
+    break;
+    
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT1 OYNATMA ONAYI
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K1_OYNAT_ONAY_BEKLE:
+    {
+      if (Serial.available() > 0) {
+        char c = Serial.peek();
+        
+        if (c == 'Y' || c == 'y') {
+          Serial.read();
+          Serial.println(F("Y\n"));
+          Serial.println(F("[CO] ✓ Kayıt1 oynatılıyor..."));
+          
+          // ✅ Kayıt1'i OynatmaModulu'ne ver
+          oynatmaBaslatKayit(kayit1, KAYIT_ORNEK_SAYISI);
+          msBaslat(600, 10000);
+          
+          durum = CO_K1_OYNAT;
         }
-        Serial.println(F("  ✓ Kayıt1 yüklendi!"));
-        Serial.println(F("  → oynatmaBaslatGercek() çağrılıyor...\n"));
-        oynatmaBaslatGercek();
-        durum = CO_K1_OYNATILIYOR;
-      }
-      break;
-    
-    case CO_K1_OYNATILIYOR:
-      if (oynatmaTamamlandiMi()) {
-        Serial.println(F("\n✓ Kayıt1 oynatma tamamlandı!\n"));
-        Serial.println(F("[ADIM 7] Kayıt2 Geçişi: Z Yukarı"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        long zMaxPos = mapA0ToZ(globalA0Max);
-        Serial.print(F("  Z: "));
-        Serial.print(zEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.print(zMaxPos);
-        Serial.println(F(" (Güvenlik - Yukarı)"));
-        moveTo(MOTOR_Z, zMaxPos, 2000);
-        durum = CO_K2_GECIS_Z_YUKARI;
-      }
-      break;
-    
-    case CO_K2_GECIS_Z_YUKARI:
-      if (moveToBittiMi(MOTOR_Z)) {
-        Serial.print(F("  ✓ Z yukarıda: "));
-        Serial.println(zEnc->getPosition());
-        Serial.println(F("\n[ADIM 8] Kayıt2 Geçişi: BIG & X Hareket"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit2 = ckKayit2Verileri();
-        long bigHedef = kayit2[0].enc;
-        Serial.print(F("  BIG: "));
-        Serial.print(bigEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.println(bigHedef);
-        Serial.print(F("  X  : "));
-        Serial.print(xEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.println(x2Hedef);
-        Serial.println();
-        moveTo(MOTOR_B, bigHedef, 100);
-        moveTo(MOTOR_X, x2Hedef, 100);
-        durum = CO_K2_GECIS_BIG_X;
-      }
-      break;
-    
-    case CO_K2_GECIS_BIG_X:
-      if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {
-        Serial.println(F("  ✓ Kayıt2[0] konumunda"));
-        Serial.print(F("    BIG: "));
-        Serial.println(bigEnc->getPosition());
-        Serial.print(F("    X  : "));
-        Serial.println(xEnc->getPosition());
-        Serial.println(F("\n[ADIM 9] Kayıt2 Geçişi: Z Aşağı"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit2 = ckKayit2Verileri();
-        long zHedef = mapA0ToZ(kayit2[0].a0);
-        Serial.print(F("  Z: "));
-        Serial.print(zEnc->getPosition());
-        Serial.print(F(" → "));
-        Serial.print(zHedef);
-        Serial.print(F(" (A0="));
-        Serial.print(kayit2[0].a0);
-        Serial.println(F(")"));
-        moveTo(MOTOR_Z, zHedef, 2000);
-        durum = CO_K2_GECIS_Z_ASAGI;
-      }
-      break;
-    
-    case CO_K2_GECIS_Z_ASAGI:
-      if (moveToBittiMi(MOTOR_Z)) {
-        Serial.print(F("  ✓ Z başlangıç konumunda: "));
-        Serial.println(zEnc->getPosition());
-        Serial.println(F("\n[ADIM 10] Kayıt2 Oynatma"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        const CK_Sample* kayit2 = ckKayit2Verileri();
-        KM_Sample* oynatmaBuffer = kayitVerileriDuzenle();
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          oynatmaBuffer[i].enc = kayit2[i].enc;
-          oynatmaBuffer[i].a0 = kayit2[i].a0;
+        else if (c == 'N' || c == 'n') {
+          Serial.read();
+          Serial.println(F("N\n"));
+          Serial.println(F("[CO] ✗ Çift oynatma iptal edildi!"));
+          
+          durum = CO_KAPALI;
         }
-        Serial.println(F("  ✓ Kayıt2 yüklendi!"));
-        Serial.println(F("  → oynatmaBaslatGercek() çağrılıyor...\n"));
-        oynatmaBaslatGercek();
-        durum = CO_K2_OYNATILIYOR;
       }
-      break;
+    }
+    break;
     
-    case CO_K2_OYNATILIYOR:
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT1 OYNATMA
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K1_OYNAT:
+    {
       if (oynatmaTamamlandiMi()) {
-        Serial.println(F("\n✓ Kayıt2 oynatma tamamlandı!\n"));
+        Serial.println(F("[CO] ✓ Kayıt1 tamamlandı!"));
+        durum = CO_K2_Z_YUKARI_BASLA;
+      }
+    }
+    break;
+    
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT2 GEÇİŞİ
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K2_Z_YUKARI_BASLA:
+    {
+      Serial.println(F("[CO] Kayıt2 Geçişi: Z yukarı"));
+      
+      // ✅ Z yukarı (global A0 max'a göre)
+      long zHedef = hesaplaZMax();
+      moveTo(MOTOR_Z, zHedef, 10000,false);
+      
+      durum = CO_K2_Z_YUKARI_BEKLE;
+    }
+    break;
+    
+    case CO_K2_Z_YUKARI_BEKLE:
+    {
+      if (!moveToAktifMi(MOTOR_Z)) {
+        pulseAtDurdur(MOTOR_Z);
+        
+        Serial.println(F("[CO] ✓ Z yukarıda."));
+        
+        durum = CO_K2_XB_BASLA;
+      }
+    }
+    break;
+    
+    case CO_K2_XB_BASLA:
+    {
+      Serial.println(F("[CO] BIG+X → Kayıt2[0]"));
+      
+      moveTo(MOTOR_B, kayit2[0].enc, 200,false);
+      moveTo(MOTOR_X, x2Hedef, 10000,false);
+      
+      durum = CO_K2_XB_BEKLE;
+    }
+    break;
+    
+    case CO_K2_XB_BEKLE:
+    {
+      bool xDurdu = !moveToAktifMi(MOTOR_X);
+      bool bigDurdu = !moveToAktifMi(MOTOR_B);
+      
+      if (xDurdu && bigDurdu) {
+        pulseAtDurdur(MOTOR_X);
+        pulseAtDurdur(MOTOR_B);
+        
+        Serial.println(F("[CO] ✓ Kayıt2[0] pozisyonu. Z iniyor..."));
+        
+        durum = CO_K2_Z_ASAGI_BASLA;
+      }
+    }
+    break;
+    
+    case CO_K2_Z_ASAGI_BASLA:
+    {
+      // Z → Kayıt2[0].a0
+      uint16_t a0Hedef = kayit2[0].a0;
+      long zHedef = mapA0ToZEnc(a0Hedef);
+      
+      Serial.print(F("  Z → ")); Serial.println(zHedef);
+      
+      moveTo(MOTOR_Z, zHedef, 5000,false);
+      
+      durum = CO_K2_Z_ASAGI_BEKLE;
+    }
+    break;
+    
+    case CO_K2_Z_ASAGI_BEKLE:
+    {
+      if (!moveToAktifMi(MOTOR_Z)) {
+        pulseAtDurdur(MOTOR_Z);
+        
+        Serial.println(F("[CO] ✓ Kayıt2 başlangıç pozisyonu hazır!"));
+        Serial.println(F("\n[CO] ╔════════════════════════════════════════╗"));
+        Serial.println(F("[CO] ║  Kayıt2 oynatılsın mı? (Y/N)         ║"));
+        Serial.println(F("[CO] ╚════════════════════════════════════════╝"));
+        
+        durum = CO_K2_OYNAT_ONAY_BEKLE;
+      }
+    }
+    break;
+    
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT2 OYNATMA ONAYI
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K2_OYNAT_ONAY_BEKLE:
+    {
+      if (Serial.available() > 0) {
+        char c = Serial.peek();
+        
+        if (c == 'Y' || c == 'y') {
+          Serial.read();
+          Serial.println(F("Y\n"));
+          Serial.println(F("[CO] ✓ Kayıt2 oynatılıyor..."));
+          
+          // ✅ Kayıt2'yi OynatmaModulu'ne ver
+          oynatmaBaslatKayit(kayit2, KAYIT_ORNEK_SAYISI);
+          msBaslat(600, 10000);
+          
+          durum = CO_K2_OYNAT;
+        }
+        else if (c == 'N' || c == 'n') {
+          Serial.read();
+          Serial.println(F("N\n"));
+          Serial.println(F("[CO] ✗ Çift oynatma iptal edildi!"));
+          
+          durum = CO_KAPALI;
+        }
+      }
+    }
+    break;
+    
+    // ═══════════════════════════════════════════════════════════
+    // KAYIT2 OYNATMA
+    // ═══════════════════════════════════════════════════════════
+    
+    case CO_K2_OYNAT:
+    {
+      if (oynatmaTamamlandiMi()) {
+        Serial.println(F("[CO] ✓ Kayıt2 tamamlandı!"));
         Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-        Serial.println(F("║         ÇİFT OYNATMA TAMAMLANDI! ✓             ║"));
+        Serial.println(F("║       ÇİFT OYNATMA TAMAMLANDI! ✓               ║"));
         Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-        Serial.println(F("─────────────────────────────────────────────────"));
-        Serial.println(F("SONUÇ:"));
-        Serial.print(F("  Kayıt1 (X1="));
-        Serial.print(x1Hedef);
-        Serial.println(F(") → Oynatıldı ✓"));
-        Serial.print(F("  Kayıt2 (X2="));
-        Serial.print(x2Hedef);
-        Serial.println(F(") → Oynatıldı ✓"));
-        Serial.println(F("─────────────────────────────────────────────────\n"));
-        Serial.println(F("✓ Tekrar oynatmak için 'CO' tuşlayın.\n"));
-        durum = CO_TAMAMLANDI;
+        //pulseAtHepsiniTamamla(); //sonra aktif et
+        durum = CO_BITTI;
       }
-      break;
-    
-    case CO_TAMAMLANDI:
-      return;
+    }
+    break;
     
     default:
-      Serial.println(F("✗ Bilinmeyen durum!"));
-      durum = CO_KAPALI;
       break;
   }
 }
 
-void coZSifirlamaReset() {
-  zSifirlandiMi = false;
-  Serial.println(F("[ÇİFT OYNATMA] Z sıfırlama bayrağı sıfırlandı."));
-  Serial.println(F("  Bir sonraki CO komutunda Z sıfırlama yapılacak.\n"));
-}
-
+// ═══════════════════════════════════════════════════════════════
+// DURUM BİLGİLERİ
+// ═══════════════════════════════════════════════════════════════
 bool coAktifMi() {
-  return (durum != CO_KAPALI && durum != CO_TAMAMLANDI);
+  return durum != CO_KAPALI && durum != CO_BITTI;
 }
 
 bool coTamamlandiMi() {
-  return (durum == CO_TAMAMLANDI);
-}
-
-uint8_t coAsama() {
-  if (durum == CO_KAPALI) return 0;
-  if (durum <= CO_Z_SIFIRLAMA_ONAY) return 1;
-  if (durum <= CO_K1_OYNATILIYOR) return 2;
-  if (durum <= CO_K2_OYNATILIYOR) return 3;
-  if (durum == CO_TAMAMLANDI) return 4;
-  return 0;
+  return durum == CO_BITTI;
 }
 
 void coDurdur() {
-  Serial.println(F("\n[ÇİFT OYNATMA] Acil durduruldu!"));
-  moveToDurdur(MOTOR_X);
-  moveToDurdur(MOTOR_B);
-  moveToDurdur(MOTOR_Z);
+  Serial.println(F("[CO] Çift Oynatma Durduruldu!"));
+  
+  moveToHepsiniDurdur();
+  pulseAtHepsiniDurdur();
   oynatmaDurdur();
+  
   durum = CO_KAPALI;
-  Serial.println();
+}
+
+void coZSifirlamaReset() {
+  zSifirlamaTamamlandi = false;
+  Serial.println(F("[CO] Z sıfırlama reset edildi."));
 }

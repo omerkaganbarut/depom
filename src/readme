@@ -1,1965 +1,217 @@
-# 🔬 ÇİFT KAYIT/OYNATMA - ULTRA DETAYLI DEBUG REHBERİ
-
-## 📚 İÇİNDEKİLER
-1. [Başlangıç: Arduino İlk Açılış](#-başlangıç-arduino-ilk-açılış)
-2. [E Komutu: Encoder Okuma](#-e-komutu-encoder-okuma)
-3. [M Komutu: Manuel Motor Sürme](#-m-komutu-manuel-motor-sürme)
-4. [CK Komutu: Çift Kayıt (Ultra Detaylı)](#-ck-komutu-çift-kayit-ultra-detayli)
-5. [CO Komutu: Çift Oynatma (İlk Depo)](#-co-komutu-çift-oynatma-ilk-depo)
-6. [CO Komutu: Çift Oynatma (Sonraki Depolar)](#-co-komutu-çift-oynatma-sonraki-depolar)
-7. [Olası Sorunlar ve Çözümleri](#-olası-sorunlar-ve-çözümleri)
-8. [Proje Tutarsızlıkları](#-proje-tutarsızlıkları)
-
----
-
-## 🚀 BAŞLANGIÇ: ARDUINO İLK AÇILIŞ
-
-### Arduino'ya Güç Verildi
-```
-┌─────────────────────────────────────┐
-│ Arduino RESET                       │
-├─────────────────────────────────────┤
-│ 1. Bootloader çalışır (1-2 sn)     │
-│ 2. setup() fonksiyonu çağrılır      │
-└─────────────────────────────────────┘
-```
-
-### setup() İçinde Neler Oluyor?
-
-#### [1/5] Serial Başlatma
-```cpp
-// main.cpp - setup()
-Serial.begin(115200);
-delay(500);
-```
-**NE OLDU:**
-- Serial port açıldı (115200 baud)
-- 500ms bekle (port stabilize olsun)
-
-#### [2/5] Encoder'lar Başlatılıyor
-```cpp
-zEnc.begin();
-xEnc.begin();
-bigEnc.begin();
-```
-**NE OLDU (her encoder için):**
-```cpp
-// stepmotorenkoderiokuma.cpp - begin()
-pinMode(_pinA, INPUT_PULLUP);  // A fazı pull-up ile input
-pinMode(_pinB, INPUT_PULLUP);  // B fazı pull-up ile input
-_lastB = digitalRead(_pinB);   // İlk B durumu oku
-
-// Interrupt bağla (örnek: ENC3_A_PIN = 18)
-attachInterrupt(digitalPinToInterrupt(_pinA), isrRouter2, CHANGE);
-```
-**SONUÇ:** Her encoder kesmesi aktif, pozisyon sayımı başladı.
-
-#### [3/5] MoveTo Modülü Setup
-```cpp
-moveToSetup(&zEnc, &xEnc, &bigEnc);
-```
-**NE OLDU:**
-```cpp
-// MoveTo.cpp - moveToSetup()
-encoders[MOTOR_Z] = &zEnc;   // Pointer kaydedildi
-encoders[MOTOR_X] = &xEnc;
-encoders[MOTOR_B] = &bigEnc;
-```
-**SONUÇ:** MoveTo artık encoder'lara erişebilir.
-
-#### [4/5] Kayıt ve Oynatma Modülleri
-```cpp
-kayitEncoderSetup(&bigEnc);
-oynatmaEncoderSetup(&bigEnc, &zEnc);
-oynatmaParametreSetup(&bigFreqMin, &bigFreqMax, &zEncMin, &zEncMax);
-```
-**NE OLDU:** Encoder pointer'ları ve parametre pointer'ları kaydedildi.
-
-#### [5/5] Çift Kayıt/Oynatma Modülleri
-```cpp
-ckEncoderSetup(&bigEnc, &xEnc);
-coEncoderSetup(&bigEnc, &xEnc, &zEnc);
-coParametreSetup(&bigFreqMin, &bigFreqMax, &zEncMin, &zEncMax);
-```
-**NE OLDU:** Tüm modüller artık encoder'lara ve parametrelere erişebilir.
-
-### Menü Yazdırıldı
-```cpp
-yazdirMenu();
-```
-**EKRANDA:** Komut listesi görünür.
-
-### setup() Bitti → loop() Başladı
-```cpp
-void loop() {
-  // Arka plan işleyicileri
-  moveToRun();
-  kayitRun();
-  oynatmaRun();
-  ckRun();
-  coRun();
-  
-  // Komut dinleme
-  if (Serial.available()) {
-    char cmd = Serial.read();
-    switch (cmd) { ... }
-  }
-}
-```
-
----
-
-## 📊 E KOMUTU: ENCODER OKUMA
-
-### Senaryo: E Tuşladık
-
-#### [1] Serial Buffer'da 'E' Var
-```cpp
-// loop() içinde
-if (Serial.available()) {  // true (1 karakter bekliyor)
-  char cmd = Serial.read();  // cmd = 'E'
-  
-  switch (cmd) {
-    case 'E':
-      handleEncoderOku();  // ← Çağrıldı
-      break;
-  }
-}
-```
-
-#### [2] handleEncoderOku() Çalıştı
-```cpp
-void handleEncoderOku() {
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║          ENCODER POZİSYONLARI                  ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝"));
-  
-  // Encoder değerlerini oku
-  long z = zEnc.getPosition();    // Örnek: -250
-  long x = xEnc.getPosition();    // Örnek: 5000
-  long big = bigEnc.getPosition(); // Örnek: 12458
-  
-  // Yazdır
-  Serial.print(F("  Motor Z (Yukarı-Aşağı) : "));
-  Serial.println(z);
-  
-  Serial.print(F("  Motor X (Sağa-Sola)    : "));
-  Serial.println(x);
-  
-  Serial.print(F("  Motor BIG (Döner)      : "));
-  Serial.println(big);
-  
-  Serial.println(F("───────────────────────────────────────────────\n"));
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║          ENCODER POZİSYONLARI                  ║
-╚════════════════════════════════════════════════╝
-  Motor Z (Yukarı-Aşağı) : -250
-  Motor X (Sağa-Sola)    : 5000
-  Motor BIG (Döner)      : 12458
-───────────────────────────────────────────────
-```
-
-#### [3] loop() Devam Ediyor
-```cpp
-// handleEncoderOku() bitti, return edildi
-// loop() başa döndü, Serial yeni komut bekliyor
-```
-
-**ÖNEMLİ:** E komutu **BLOCKING değil**. Encoder'ları okuyup yazdırır, biter.
-
----
-
-## 🎮 M KOMUTU: MANUEL MOTOR SÜRME
-
-### Senaryo: M Komutu ile Z Motoru Sürme
-
-#### [1] Serial'de 'M' Yazdık
-```
-Kullanıcı klavyeden şunu yazdı: M
-Serial buffer: 'M'
-```
-
-#### [2] loop() - 'M' Algılandı
-```cpp
-if (Serial.available()) {  // true
-  char cmd = Serial.read();  // cmd = 'M'
-  
-  switch (cmd) {
-    case 'M':
-      handleMoveTo();  // ← Çağrıldı
-      break;
-  }
-}
-```
-
-#### [3] handleMoveTo() İçinde
-```cpp
-void handleMoveTo() {
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║              MOVETO (İVMELİ)                   ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝"));
-  Serial.println(F("  Motor (Z/X/B): "));
-  
-  // [BLOCKING BEKLE] Kullanıcıdan motor seçimi
-  while (Serial.available() == 0) {
-    delay(10);  // ← BURADA BEKLE
-  }
-  
-  char motorChar = Serial.read();  // motorChar = 'Z'
-  Serial.println(motorChar);
-  
-  uint8_t motor;
-  if (motorChar == 'Z' || motorChar == 'z') {
-    motor = MOTOR_Z;  // motor = 0
-  }
-  // ...
-  
-  Serial.println(F("  Hedef encoder: "));
-  
-  // [BLOCKING BEKLE] Kullanıcıdan hedef encoder
-  while (Serial.available() == 0) {
-    delay(10);
-  }
-  
-  long hedef = Serial.parseInt();  // hedef = -500
-  Serial.println(hedef);
-  
-  Serial.println(F("  Max Hz: "));
-  
-  // [BLOCKING BEKLE] Kullanıcıdan hız
-  while (Serial.available() == 0) {
-    delay(10);
-  }
-  
-  unsigned int hz = Serial.parseInt();  // hz = 50
-  Serial.println(hz);
-  
-  // [KRİTİK] moveTo() çağrılıyor
-  if (moveTo(motor, hedef, hz)) {  // ← moveTo(0, -500, 50)
-    Serial.println(F("✓ MoveTo başlatıldı!\n"));
-  } else {
-    Serial.println(F("✗ MoveTo başlatılamadı!\n"));
-  }
-  
-  // handleMoveTo() bitti, return
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║              MOVETO (İVMELİ)                   ║
-╚════════════════════════════════════════════════╝
-  Motor (Z/X/B): Z
-  Hedef encoder: -500
-  Max Hz: 50
-✓ MoveTo başlatıldı!
-```
-
-#### [4] moveTo(MOTOR_Z, -500, 50) İçinde - İLK KOD ÇAĞRISI
-```cpp
-// MoveTo.cpp - moveTo()
-bool moveTo(uint8_t motorIndex, long hedefEnc, unsigned int maxHz) {
-  // [KONTROL 1] Motor zaten aktif mi?
-  if (st[motorIndex].aktif) {
-    Serial.println(F("✗ Motor zaten aktif!"));
-    return false;
-  }
-  // ✓ Geçti (motor durmuş)
-  
-  // [HESAPLAMA 1] Mevcut pozisyon
-  long mevcutEnc = encoders[motorIndex]->getPosition();
-  // mevcutEnc = 0 (Z encoder başlangıçta 0)
-  
-  // [HESAPLAMA 2] Mesafe ve yön
-  long fark = hedefEnc - mevcutEnc;  // -500 - 0 = -500
-  unsigned long toplamPulse = (unsigned long)abs(fark);  // 500
-  int yon = (fark > 0) ? 0 : 1;  // yon = 1 (geri)
-  
-  // [HESAPLAMA 3] Hız limitler
-  if (maxHz < MIN_SPEED_HZ) maxHz = MIN_SPEED_HZ;
-  if (maxHz > 2000) maxHz = 2000;
-  // maxHz = 50 (zaten sınırlar içinde)
-  
-  // [KRİTİK] Durumu ayarla
-  st[motorIndex].aktif = true;
-  st[motorIndex].hedefEnc = -500;
-  st[motorIndex].toplamPulse = 500;
-  st[motorIndex].kalanPulse = 500;
-  st[motorIndex].yon = 1;
-  st[motorIndex].maxHz = 50;
-  st[motorIndex].bittiEdge = false;
-  
-  // [FAZ BELİRLE] Mesafe kontrolü
-  if (toplamPulse < ACCEL_RAMP_PULSE) {  // 500 < 200? HAYIR
-    // Normal trapezoid profil
-    st[motorIndex].faz = FAZ_HIZLANMA;
-  }
-  
-  // [İLK SEGMENT] İlk segment hesapla
-  unsigned int ilkHiz = hesaplaHiz(&st[motorIndex]);
-  // ilkHiz ≈ 10 Hz (minimum hızdan başla)
-  
-  unsigned long ilkSegmentPulse = hesaplaSegmentPulse(ilkHiz);
-  // ilkSegmentPulse ≈ 1-2 pulse (hıza göre)
-  
-  // [pulseAt ÇAĞRI] İlk segment başlat
-  useMotor(motorIndex);
-  pulseAt(ilkSegmentPulse, yon, ilkHiz);
-  
-  // moveTo() başarıyla tamamlandı
-  return true;
-}
-```
-
-**ÖNEMLİ NOKTALAR:**
-- `st[MOTOR_Z].aktif = true` → Artık motor aktif
-- `st[MOTOR_Z].kalanPulse = 500` → Hedefe 500 pulse kaldı
-- `pulseAt(1, 1, 10)` → İlk segment: 1 pulse, geri yön, 10 Hz
-
-#### [5] pulseAt(1, 1, 10) İçinde - İLK SEGMENT BAŞLATMA
-```cpp
-// PulseAt.cpp - pulseAt()
-void pulseAt(unsigned long toplamPulse, int yon, unsigned int hertz) {
-  uint8_t m = aktifMotorIndex;  // m = MOTOR_Z (0)
-  
-  // [KONTROL] toplamPulse > 0 mı?
-  if (toplamPulse > 0) {
-    // [YENİ İŞ BAŞLATMA MODU]
-    
-    int stepPin = stepPins[m];  // STEP1_PIN (5)
-    int dirPin = dirPins[m];    // DIR1_PIN (36)
-    int enaPin = enaPins[m];    // ENA1_PIN (37)
-    
-    // [YÖN AYARI] DIR pini ayarla
-    digitalWrite(dirPin, yon);  // DIR1_PIN = HIGH (geri)
-    
-    // [ENABLE AYARI] Motoru aktif et
-    digitalWrite(enaPin, LOW);  // ENA1_PIN = LOW (aktif)
-    
-    // [DURUM AYARI] Motor durumunu kaydet
-    pulseStates[m].aktif = true;
-    pulseStates[m].hedef = 1;      // 1 pulse hedefi
-    pulseStates[m].sayac = 0;      // Başlangıç
-    pulseStates[m].yon = 1;
-    pulseStates[m].hertz = 10;
-    pulseStates[m].bittiEdge = false;
-    
-    // [ZAMAN HESABI] Bir pulse süresi
-    pulseStates[m].pulse_us = (hertz > 0) ? (1000000UL / hertz) : 10000;
-    // pulse_us = 1000000 / 10 = 100000 µs (0.1 saniye)
-    
-    pulseStates[m].sonZaman_us = micros();  // Şu anki zaman
-    
-    // pulseAt() bitti (yeni iş başlatma modu)
-    return;
-  }
-  
-  // ... arka plan modu (toplamPulse = 0 olduğunda)
-}
-```
-
-**ÖNEMLİ:** İlk segment başlatıldı, motor aktif! Ama henüz pulse atmadı.
-
-#### [6] loop() - İlk Döngü Devam Ediyor
-```cpp
-void loop() {
-  moveToRun();  // ← ŞİMDİ BU AKTİF!
-  kayitRun();   // KAPALI
-  oynatmaRun(); // KAPALI
-  ckRun();      // KAPALI
-  coRun();      // KAPALI
-  
-  if (Serial.available()) { ... }
-}
-```
-
-#### [7] moveToRun() - İLK ÇAĞRI
-```cpp
-// MoveTo.cpp - moveToRun()
-void moveToRun() {
-  for (uint8_t m = 0; m < 3; m++) {  // Her motor için
-    if (!st[m].aktif) continue;  // m=0 (Z) aktif → devam
-    
-    // [1] pulseAt arka planını çalıştır
-    useMotor(m);
-    pulseAt(0, 0, 0);  // ← ARKA PLAN MODU
-    
-    // ... (devam edecek)
-  }
-}
-```
-
-#### [8] pulseAt(0, 0, 0) - ARKA PLAN MODU (İLK PULSE)
-```cpp
-void pulseAt(unsigned long toplamPulse, int yon, unsigned int hertz) {
-  uint8_t m = aktifMotorIndex;  // m = MOTOR_Z (0)
-  
-  // [KONTROL] toplamPulse = 0 mı?
-  if (toplamPulse == 0) {
-    // [ARKA PLAN MODU]
-    
-    // [KONTROL] Motor aktif mi?
-    if (!pulseStates[m].aktif) return;  // ✓ Aktif
-    
-    // [ZAMAN KONTROLÜ] Pulse zamanı geldi mi?
-    unsigned long simdi = micros();  // Örn: 1000 µs geçti
-    unsigned long gecen = simdi - pulseStates[m].sonZaman_us;
-    
-    if (gecen >= pulseStates[m].pulse_us) {  // 1000 ≥ 100000? HAYIR
-      // Henüz pulse zamanı gelmedi
-      return;
-    }
-    
-    // (Bu noktaya ulaşmadık çünkü henüz zaman geçmedi)
-  }
-}
-```
-
-**DÖNGÜ DEVAM EDER:**
-```
-loop() → moveToRun() → pulseAt(0,0,0) → Zaman yetmedi → return
-loop() → moveToRun() → pulseAt(0,0,0) → Zaman yetmedi → return
-...
-(100000 µs = 0.1 saniye geçene kadar)
-```
-
-#### [8.2] pulseAt(0, 0, 0) - İLK PULSE ATIYOR
-```cpp
-// 100000 µs geçti, pulse zamanı geldi!
-
-if (gecen >= pulseStates[m].pulse_us) {  // 100000 ≥ 100000? EVET!
-  
-  // [PULSE ÜRETİM] STEP pini HIGH → LOW
-  int stepPin = stepPins[m];  // STEP1_PIN (5)
-  
-  digitalWrite(stepPin, HIGH);      // ← Motor bir adım attı
-  delayMicroseconds(PULSE_HIGH_US); // 10 µs bekle
-  digitalWrite(stepPin, LOW);
-  
-  // [SAYAÇ] Bir pulse atıldı
-  pulseStates[m].sayac++;  // sayac = 1
-  
-  // [ZAMAN] Sonraki pulse için zaman kaydet
-  pulseStates[m].sonZaman_us = micros();
-  
-  // [KONTROL] Hedef pulse sayısına ulaşıldı mı?
-  if (pulseStates[m].sayac >= pulseStates[m].hedef) {  // 1 ≥ 1? EVET!
-    // [SEGMENT BİTTİ]
-    pulseStates[m].aktif = false;
-    pulseStates[m].bittiEdge = true;  // ← "Segment bitti" bayrağı
-  }
-}
-```
-
-**SONUÇ:** İlk segment (1 pulse) tamamlandı!
-
-#### [9] moveToRun() Devam Ediyor - SONRAKI SEGMENT
-```cpp
-void moveToRun() {
-  for (uint8_t m = 0; m < 3; m++) {
-    if (!st[m].aktif) continue;
-    
-    // [1] pulseAt arka planını çalıştır
-    useMotor(m);
-    pulseAt(0, 0, 0);  // ← Segment bitti, bittiEdge = true
-    
-    // [2] Segment bitti mi?
-    if (pulseAtBittiMi(m)) {  // EVET!
-      
-      // [3] Kalan pulse güncelle
-      st[m].kalanPulse -= (pulseStates[m].hedef);
-      // kalanPulse = 500 - 1 = 499
-      
-      // [4] Hedefe ulaşıldı mı?
-      if (st[m].kalanPulse == 0) {  // 499 == 0? HAYIR
-        // Devam...
-      }
-      
-      // [5] Faz geçişi (Hızlanma devam)
-      unsigned long tamamlanan = st[m].toplamPulse - st[m].kalanPulse;
-      // tamamlanan = 500 - 499 = 1
-      
-      if (st[m].faz == FAZ_HIZLANMA) {
-        if (tamamlanan >= ACCEL_RAMP_PULSE) {  // 1 ≥ 200? HAYIR
-          // Hızlanma devam
-        }
-      }
-      
-      // [6] Sonraki segment başlat
-      unsigned int hiz = hesaplaHiz(&st[m]);  // hiz ≈ 11 Hz (biraz arttı)
-      unsigned long segmentPulse = hesaplaSegmentPulse(hiz);  // ≈ 1-2
-      
-      if (segmentPulse > st[m].kalanPulse) segmentPulse = st[m].kalanPulse;
-      
-      useMotor(m);
-      pulseAt(segmentPulse, st[m].yon, hiz);  // ← Yeni segment başladı
-    }
-  }
-}
-```
-
-**BU DÖNGÜ DEVAM EDER:** Her loop'ta bir segment tamamlanır, hız yavaş yavaş artar, sonra sabit kalır, sonra yavaşlar, hedefe ulaşılır.
-
-#### [10] Hedefe Ulaşıldı (500. Pulse)
-```cpp
-if (st[m].kalanPulse == 0) {
-  st[m].aktif = false;
-  st[m].bittiEdge = true;
-  st[m].faz = FAZ_KAPALI;
-  // ✓ Motor durdu!
-}
-```
-
-#### [11] moveToBittiMi() Kontrolü
-```cpp
-// Kullanıcı kodu (veya başka bir modül)
-if (moveToBittiMi(MOTOR_Z)) {
-  Serial.println("Z motoru hedefe ulaştı!");
-  // bittiEdge bir kez true döner, sonra false olur (edge detection)
-}
-```
-
-**ÖZET:** M komutu → moveTo() çağrıldı → pulseAt() segmentler başlattı → moveToRun() her segment'i işledi → Motor hedefe ulaştı.
-
----
-
-## 📝 CK KOMUTU: ÇİFT KAYIT (ULTRA DETAYLI)
-
-### SENARYO: Sıfırdan CK Komutu
-
-#### BAŞLANGIÇ DURUMU
-```
-Arduino çalışıyor
-loop() dönüyor
-ckRun() → case CK_KAPALI: return; (hiçbir şey yapmıyor)
-Serial bekliyor
-```
-
-### ⚡ [ADIM 1/7] 'CK' TUŞLANDI → X1'E GİDİŞ
-
-#### [1.1] Serial Buffer'da 'C' Geldi
-```cpp
-// loop() - ilk çağrı
-if (Serial.available()) {  // true
-  char cmd = Serial.read();  // cmd = 'C'
-  
-  switch (cmd) {
-    case 'C':
-      // İkinci karakteri bekle
-      if (Serial.available() == 0) {
-        delay(50);  // 50ms bekle
-      }
-      
-      if (Serial.available() > 0) {
-        char c2 = Serial.read();  // c2 = 'K'
-        
-        if (c2 == 'K' || c2 == 'k') {
-          handleCiftKayit();  // ← Çağrıldı!
-        }
-      }
-      break;
-  }
-}
-```
-
-#### [1.2] handleCiftKayit() İçinde
-```cpp
-void handleCiftKayit() {
-  // [KONTROL 1] Başka işlem var mı?
-  if (ckAktifMi() || coAktifMi() || kayitAktifMi() || oynatmaAktifMi()) {
-    Serial.println(F("\n✗ Başka bir işlem devam ediyor!"));
-    return;  // ← Fonksiyon biter, loop() devam eder
-  }
-  // ✓ Geçti (hiçbir işlem yok)
-  
-  // [EKRAN] Parametreleri göster
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║          ÇİFT KAYIT PARAMETRELERİ              ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝"));
-  Serial.print(F("  X1 Pozisyonu  : "));
-  Serial.println(x1Pos);  // 5000
-  Serial.print(F("  X2 Pozisyonu  : "));
-  Serial.println(x2Pos);  // 12000
-  Serial.println(F("  Kayıt1 Yönü   : İleri (0→16000)"));
-  Serial.println(F("  Kayıt2 Yönü   : Geri (16000→0)"));
-  Serial.println(F("───────────────────────────────────────────────"));
-  Serial.println(F("Başlatılsın mı? (Y/N)"));
-  Serial.print(F("> "));
-  
-  // [BEKLE] Kullanıcıdan Y/N
-  while (Serial.available() == 0) {
-    delay(10);  // ← BURADA BEKLE (kullanıcı yazana kadar)
-  }
-  
-  char onay = Serial.read();  // onay = 'Y'
-  Serial.println(onay);
-  
-  if (onay == 'Y' || onay == 'y') {
-    ckBaslat(x1Pos, x2Pos, 0, 1);  // ← ckBaslat() çağrıldı!
-    Serial.println(F("\n✓ Çift kayıt başlatıldı!"));
-  } else if (onay == 'N' || onay == 'n') {
-    Serial.println(F("\n✗ İptal edildi!"));
-  }
-  
-  // handleCiftKayit() bitti, return
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║          ÇİFT KAYIT PARAMETRELERİ              ║
-╚════════════════════════════════════════════════╝
-  X1 Pozisyonu  : 5000
-  X2 Pozisyonu  : 12000
-  Kayıt1 Yönü   : İleri (0→16000)
-  Kayıt2 Yönü   : Geri (16000→0)
-───────────────────────────────────────────────
-Başlatılsın mı? (Y/N)
-> Y
-
-✓ Çift kayıt başlatıldı!
-```
-
-#### [1.3] ckBaslat(5000, 12000, 0, 1) İçinde
-```cpp
-// CiftKayitModulu.cpp
-void ckBaslat(long x1Enc, long x2Enc, int kayit1Yon, int kayit2Yon) {
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║           ÇİFT KAYIT BAŞLATILIYOR              ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-  
-  // [1] Z sıfırlama bayrağını sıfırla (Çift Oynatma için önemli!)
-  coZSifirlamaReset();  // ← zSifirlandiMi = false
-  
-  // [2] Parametreleri kaydet
-  x1Hedef = 5000;
-  x2Hedef = 12000;
-  yon1 = 0;  // Kayıt1 ileri (0→16000)
-  yon2 = 1;  // Kayıt2 geri (16000→0)
-  
-  // [3] Encoder kontrol
-  if (bigEnc == nullptr || xEnc == nullptr) {  // ✓ Geçti (var)
-    Serial.println(F("\n✗ Hata: Encoder'lar ayarlanmamış!"));
-    return;
-  }
-  
-  // [4] X1'e git
-  Serial.println(F("\n[ADIM 1/7] X1 pozisyonuna gidiliyor..."));
-  
-  if (!moveTo(MOTOR_X, x1Hedef, 100)) {  // ← moveTo(MOTOR_X, 5000, 100) çağrıldı!
-    Serial.println(F("✗ X motor hareket başlatılamadı!"));
-    return;
-  }
-  // ✓ moveTo() başarılı → X motoru hareket ediyor
-  
-  // [5] Durumu değiştir
-  durum = CK_X1_GIDIYOR;  // ← DURUM DEĞİŞTİ!
-  
-  // ckBaslat() bitti, return
-}
-```
-
-**ÖNEMLİ NOKTALAR:**
-- `coZSifirlamaReset()` → CO komutu için Z sıfırlama bayrağını sıfırlar
-- `moveTo(MOTOR_X, 5000, 100)` → X motoru 5000 encoder pozisyonuna gidiyor (zaten M komutunda anlattık, tekrar detaya girmeyeceğim)
-- `durum = CK_X1_GIDIYOR` → Artık `ckRun()` içinde bu case çalışacak!
-
-#### [1.4] loop() Devam Ediyor
-```cpp
-void loop() {
-  moveToRun();  // ← X motoru segment işliyor
-  kayitRun();   // KAPALI
-  oynatmaRun(); // KAPALI
-  ckRun();      // ← ŞİMDİ AKTİF! (durum = CK_X1_GIDIYOR)
-  coRun();      // KAPALI
-  
-  if (Serial.available()) { ... }
-}
-```
-
----
-
-### ⚡ [ADIM 2/7] ckRun() - CK_X1_GIDIYOR DURUMU
-
-#### [2.1] ckRun() İlk Çağrı
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_KAPALI:
-      return;  // ← Artık buraya girmez!
-    
-    case CK_X1_GIDIYOR:  // ← BURAYA GİRER!
-      if (moveToBittiMi(MOTOR_X)) {  // X motoru bitti mi?
-        // Henüz değil... (motor hala hareket ediyor)
-      }
-      break;
-  }
-}
-```
-
-#### [2.2] moveToRun() X Motorunu İşliyor
-```
-loop() → moveToRun() → X motoru segment segment hedefe gidiyor
-loop() → ckRun() → case CK_X1_GIDIYOR → moveToBittiMi()? Hayır → break
-loop() → moveToRun() → ...
-loop() → ckRun() → moveToBittiMi()? Hayır → break
-...
-(Bu döngü X motoru hedefe ulaşana kadar devam eder)
-```
-
-**ÖZET:** `ckRun()` her loop'ta kontrol ediyor ama motor henüz hedefe ulaşmadı, o yüzden bekliyor.
-
-#### [2.3] X Motoru Hedefe Ulaştı!
-```cpp
-// MoveTo.cpp - moveToRun() içinde
-if (st[MOTOR_X].kalanPulse == 0) {
-  st[MOTOR_X].aktif = false;
-  st[MOTOR_X].bittiEdge = true;  // ← "Bitti" bayrağı kaldırıldı
-}
-```
-
-#### [2.4] ckRun() - Motor Bitti Algılandı
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_X1_GIDIYOR:
-      if (moveToBittiMi(MOTOR_X)) {  // EVET! bittiEdge = true döndü
-        // ✅ DURUM GEÇİŞİ OLACAK!
-        
-        Serial.println(F("✓ X1 pozisyonuna ulaşıldı!\n"));
-        Serial.print(F("  Mevcut X: "));
-        Serial.println(xEnc->getPosition());  // Örn: 5000
-        
-        Serial.println(F("\n[ADIM 2/7] Kayıt1 hazır."));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.println(F("  Kayıt1'i başlatmak için 'Y' tuşuna basın."));
-        Serial.println(F("  İptal için 'N' tuşuna basın."));
-        Serial.print(F("  > "));
-        
-        durum = CK_X1_ONAY_BEKLE;  // ← DURUM DEĞİŞTİ!
-      }
-      break;
-  }
-  // ckRun() bitti, return
-}
-```
-
-**EKRANDA:**
-```
-✓ X1 pozisyonuna ulaşıldı!
-
-  Mevcut X: 5000
-
-[ADIM 2/7] Kayıt1 hazır.
-───────────────────────────────────────────────
-  Kayıt1'i başlatmak için 'Y' tuşuna basın.
-  İptal için 'N' tuşuna basın.
-  > _
-```
-
-**ÖNEMLİ:** Artık `durum = CK_X1_ONAY_BEKLE` → Bir sonraki `ckRun()` çağrısında bu case çalışacak ve Serial.read() bekleyecek!
-
----
-
-### ⚡ [ADIM 3/7] CK_X1_ONAY_BEKLE - KULLANICI 'Y' TUŞLADI
-
-#### [3.1] ckRun() Her Loop'ta Kontrol Ediyor
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_KAPALI:
-      return;
-    
-    case CK_X1_GIDIYOR:
-      // ... (artık buraya girmez)
-      break;
-    
-    case CK_X1_ONAY_BEKLE:  // ← ŞİMDİ BURAYA GİRER!
-      if (Serial.available()) {  // Kullanıcı bir şey yazdı mı?
-        // Henüz değil, kullanıcı bekliyor...
-      }
-      break;
-  }
-}
-```
-
-**DÖNGÜ DEVAM EDER:**
-```
-loop() → ckRun() → case CK_X1_ONAY_BEKLE → Serial.available()? Hayır → break
-loop() → ckRun() → case CK_X1_ONAY_BEKLE → Serial.available()? Hayır → break
-...
-(Kullanıcı 'Y' yazana kadar bu döngü devam eder)
-```
-
-#### [3.2] Kullanıcı 'Y' Yazdı!
-```
-Kullanıcı klavyeden: Y [Enter]
-Serial buffer: 'Y'
-```
-
-#### [3.3] ckRun() - 'Y' Algılandı
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_X1_ONAY_BEKLE:
-      if (Serial.available()) {  // EVET! Buffer'da 'Y' var
-        char c = Serial.read();  // c = 'Y'
-        
-        if (c == 'Y' || c == 'y') {  // EVET!
-          Serial.println(F("Y\n"));
-          
-          Serial.println(F("[ADIM 3/7] Kayıt1 başlatılıyor...\n"));
-          
-          kayitBaslat(yon1);  // ← kayitBaslat(0) çağrıldı!
-          
-          durum = CK_KAYIT1_CALISIYOR;  // ← DURUM DEĞİŞTİ!
-        }
-        else if (c == 'N' || c == 'n') {
-          Serial.println(F("N\n"));
-          Serial.println(F("✗ Çift kayıt iptal edildi!\n"));
-          durum = CK_KAPALI;  // ← İptal! Başa dön
-        }
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-Y
-
-[ADIM 3/7] Kayıt1 başlatılıyor...
-```
-
-#### ❓ PEKI 'N' TUŞLASAYDIK?
-```
-[SENARYO] Kullanıcı 'N' yazdı
-
-[NE OLUR]
-  durum = CK_KAPALI  // ← Durum sıfırlandı
-  
-[LOOP DEVAM EDER]
-  ckRun() → case CK_KAPALI: return;  // Hiçbir şey yapmaz
-  Serial.available() bekler  // Yeni komut beklenir
-
-[KULLANICI ŞİMDİ NE YAPABİLİR?]
-  1. E → Encoder'ları kontrol et
-  2. M → Z'yi manuel sür
-  3. CK → Tekrar çift kayıt başlat
-  4. S → Acil durdur
-
-[MOTORLAR NE DURUMDA?]
-  X motoru: 5000 pozisyonunda DURDU (motor kapalı değil, sadece pulse gönderimi durdu)
-  BIG motoru: Nerede kaldıysa orada
-  Z motoru: Nerede kaldıysa orada
-
-[ÖNEMLİ NOT]
-  'N' tuşladığında motorlar fiziksel olarak kapatılmaz!
-  Sadece pulse gönderimi durur, enable pinleri aktif kalır.
-  Motorlar yerinde tutulur (TB6600 sürücü aktif).
-```
-
-#### [3.4] kayitBaslat(0) İçinde
-```cpp
-// KayitModulu.cpp
-void kayitBaslat(int yon) {
-  Serial.println(F("[KAYIT] Başlatılıyor..."));
-  Serial.print(F("  Yön: "));
-  Serial.println(yon ? F("Geri (16000→0)") : F("İleri (0→16000)"));
-  
-  // [KONTROL 1] Encoder var mı?
-  if (bigEnc == nullptr) {  // ✓ Geçti (var)
-    Serial.println(F("✗ Encoder ayarlanmamış!"));
-    return;
-  }
-  
-  // [KONTROL 2] Başka kayıt aktif mi?
-  if (durum != KAYIT_KAPALI) {  // ✓ Geçti (kapalı)
-    Serial.println(F("✗ Zaten kayıt var!"));
-    return;
-  }
-  
-  // [PARAMETRELER] (Config.h'den)
-  // KAYIT_TOPLAM_PULSE = 16000
-  // KAYIT_ARALIK = 160
-  // KAYIT_HZ = 80
-  // KAYIT_ORNEK_SAYISI = 101
-  
-  // [MOTOR BAŞLAT] BIG motor için pulse gönderimi
-  useMotor(MOTOR_B);
-  pulseAt(KAYIT_ARALIK, yon, KAYIT_HZ);  // ← pulseAt(160, 0, 80) çağrıldı!
-  
-  // [DURUM] Kayıt durumunu değiştir
-  durum = KAYIT_HIZALAMA;  // ← DURUM DEĞİŞTİ!
-  idx = 0;  // Örnek index sıfırla
-  
-  // kayitBaslat() bitti, return
-}
-```
-
-**ÖNEMLİ NOKTALAR:**
-- `pulseAt(160, 0, 80)` → BIG motor 160 pulse, ileri yön, 80 Hz (zaten pulseAt'ı anlattık, tekrar etmeyeceğim)
-- `durum = KAYIT_HIZALAMA` → Kayıt modülü aktif oldu!
-- `idx = 0` → İlk örnek (0. index)
-
-#### [3.5] loop() Devam Ediyor
-```cpp
-void loop() {
-  moveToRun();  // KAPALI (X motoru durdu)
-  kayitRun();   // ← ŞİMDİ AKTİF! (durum = KAYIT_HIZALAMA)
-  oynatmaRun(); // KAPALI
-  ckRun();      // ← ŞİMDİ AKTİF! (durum = CK_KAYIT1_CALISIYOR)
-  coRun();      // KAPALI
-  
-  if (Serial.available()) { ... }
-}
-```
-
----
-
-### ⚡ [ADIM 4/7] kayitRun() - KAYIT_HIZALAMA DURUMU
-
-#### [4.1] kayitRun() İlk Çağrı
-```cpp
-void kayitRun() {
-  switch (durum) {
-    case KAYIT_KAPALI:
-      return;  // ← Artık buraya girmez!
-    
-    case KAYIT_HIZALAMA:  // ← BURAYA GİRER!
-      // [pulseAt arka planı]
-      useMotor(MOTOR_B);
-      pulseAt(0, 0, 0);  // ← Arka plan modu (160 pulse gönderiyor)
-      
-      // [KONTROL] İlk segment bitti mi?
-      if (pulseAtBittiMi(MOTOR_B)) {  // Henüz değil...
-        // ...
-      }
-      break;
-  }
-}
-```
-
-**DÖNGÜ DEVAM EDER:**
-```
-loop() → kayitRun() → pulseAt(0,0,0) → Pulse gönderiyor...
-loop() → kayitRun() → pulseAt(0,0,0) → Pulse gönderiyor...
-...
-(160 pulse tamamlanana kadar)
-```
-
-#### [4.2] İlk Segment (160 pulse) Tamamlandı
-```cpp
-void kayitRun() {
-  switch (durum) {
-    case KAYIT_HIZALAMA:
-      useMotor(MOTOR_B);
-      pulseAt(0, 0, 0);  // ← 160. pulse atıldı, bittiEdge = true
-      
-      if (pulseAtBittiMi(MOTOR_B)) {  // EVET!
-        // [İLK ÖRNEK] Encoder ve A0 oku
-        long enc = bigEnc->getPosition();  // Örn: 160
-        uint16_t a0 = a0FiltreliOku();     // Örn: 512
-        
-        samples[idx].enc = enc;
-        samples[idx].a0 = a0;
-        
-        Serial.print(F("["));
-        Serial.print(idx);
-        Serial.print(F("] ENC: "));
-        Serial.print(enc);
-        Serial.print(F(" | A0: "));
-        Serial.println(a0);
-        
-        idx++;  // idx = 1
-        
-        // [KONTROL] Tüm örnekler alındı mı?
-        if (idx >= KAYIT_ORNEK_SAYISI) {  // 1 >= 101? HAYIR
-          // ...
-        } else {
-          // [SONRAKI SEGMENT] Bir sonraki 160 pulse başlat
-          useMotor(MOTOR_B);
-          pulseAt(KAYIT_ARALIK, yon, KAYIT_HZ);  // ← pulseAt(160, 0, 80)
-          
-          durum = KAYIT_CALISIYOR;  // ← DURUM DEĞİŞTİ!
-        }
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-[0] ENC: 160 | A0: 512
-```
-
----
-
-### ⚡ [ADIM 5/7] kayitRun() - KAYIT_CALISIYOR DURUMU
-
-#### [5.1] kayitRun() Döngüsü
-```cpp
-void kayitRun() {
-  switch (durum) {
-    case KAYIT_CALISIYOR:  // ← BURAYA GİRER!
-      useMotor(MOTOR_B);
-      pulseAt(0, 0, 0);  // ← Pulse gönderiyor...
-      
-      if (pulseAtBittiMi(MOTOR_B)) {  // Segment bitti mi?
-        // Her segment bitişinde:
-        long enc = bigEnc->getPosition();
-        uint16_t a0 = a0FiltreliOku();
-        
-        samples[idx].enc = enc;
-        samples[idx].a0 = a0;
-        
-        Serial.print(F("["));
-        Serial.print(idx);
-        Serial.print(F("] ENC: "));
-        Serial.print(enc);
-        Serial.print(F(" | A0: "));
-        Serial.println(a0);
-        
-        idx++;
-        
-        if (idx >= KAYIT_ORNEK_SAYISI) {  // 101. örnek alındı mı?
-          Serial.println(F("\n[KAYIT] Tamamlandı! ✓\n"));
-          durum = KAYIT_TAMAMLANDI;  // ← DURUM DEĞİŞTİ!
-        } else {
-          // Sonraki segment
-          useMotor(MOTOR_B);
-          pulseAt(KAYIT_ARALIK, yon, KAYIT_HZ);
-        }
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-[0] ENC: 160 | A0: 512
-[1] ENC: 320 | A0: 518
-[2] ENC: 480 | A0: 523
-...
-[99] ENC: 15840 | A0: 789
-[100] ENC: 16000 | A0: 792
-
-[KAYIT] Tamamlandı! ✓
-```
-
-**ÖNEMLİ:** 101 örnek alındı (0-100 index), kayıt tamamlandı!
-
----
-
-### ⚡ [ADIM 6/7] ckRun() - CK_KAYIT1_CALISIYOR DURUMU
-
-#### [6.1] ckRun() Döngüsü (Kayıt1 devam ederken)
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_KAYIT1_CALISIYOR:  // ← BURAYA GİRER!
-      if (kayitTamamlandiMi()) {  // Kayıt bitti mi?
-        // Henüz değil... (kayitRun() hala çalışıyor)
-      }
-      break;
-  }
-}
-```
-
-**DÖNGÜ DEVAM EDER:**
-```
-loop() → kayitRun() → Örnekler alınıyor...
-loop() → ckRun() → case CK_KAYIT1_CALISIYOR → kayitTamamlandiMi()? Hayır → break
-...
-```
-
-#### [6.2] Kayıt1 Tamamlandı!
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_KAYIT1_CALISIYOR:
-      if (kayitTamamlandiMi()) {  // EVET! durum = KAYIT_TAMAMLANDI
-        // ✅ KAYIT1 VERİLERİNİ KOPYALA
-        
-        const KM_Sample* kayitVerisi = kayitVerileri();  // ← KayitModulu'ndan ver
-        
-        // [KOPYALA] kayitVerisi → kayit1 dizisine
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          kayit1[i].enc = kayitVerisi[i].enc;
-          kayit1[i].a0 = kayitVerisi[i].a0;
-        }
-        
-        Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-        Serial.println(F("║              KAYIT1 TAMAMLANDI                 ║"));
-        Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-        Serial.println(F("  ✓ 101 örnek Kayıt1'e kopyalandı.\n"));
-        
-        // [EKRAN] X2'ye geçiş onayı iste
-        Serial.println(F("[ADIM 4/7] X2 pozisyonuna geçiş"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.print(F("  X2 pozisyonuna gitmek için 'Y' tuşuna basın."));
-        Serial.println(F("\n  İptal için 'N' tuşuna basın."));
-        Serial.print(F("  > "));
-        
-        durum = CK_X2_ONAY_BEKLE;  // ← DURUM DEĞİŞTİ!
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║              KAYIT1 TAMAMLANDI                 ║
-╚════════════════════════════════════════════════╝
-
-  ✓ 101 örnek Kayıt1'e kopyalandı.
-
-[ADIM 4/7] X2 pozisyonuna geçiş
-───────────────────────────────────────────────
-  X2 pozisyonuna gitmek için 'Y' tuşuna basın.
-  İptal için 'N' tuşuna basın.
-  > _
-```
-
-#### ❓ PEKI KAYIT1 SIRASINDA 'N' TUŞLASAYDIK?
-```
-[SENARYO] Kayıt1 alınırken (örn. 50. örnekte) kullanıcı 'N' bastı
-
-[NE OLUR]
-  ❌ OLMAZ! ckRun() → case CK_KAYIT1_CALISIYOR içinde Serial.read() yok!
-  
-[NEDEN?]
-  Kayıt sırasında kullanıcı müdahalesi istemiyoruz.
-  Kayıt 101 örnek alınana kadar devam eder.
-  
-[EĞER İPTAL ETMEK İSTERSEN]
-  Acil durdurma: 'S' tuşuna bas
-  → Tüm motorlar durur
-  → ckDurdur() çağrılır
-  → durum = CK_KAPALI
-```
-
----
-
-### ⚡ [ADIM 7/14] CK_X2_ONAY_BEKLE - KULLANICI 'Y' TUŞLADI
-
-#### [7.1] ckRun() Her Loop'ta Kontrol Ediyor
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_X2_ONAY_BEKLE:  // ← BURAYA GİRER!
-      if (Serial.available()) {  // Kullanıcı bir şey yazdı mı?
-        char c = Serial.read();  // c = 'Y'
-        
-        if (c == 'Y' || c == 'y') {
-          Serial.println(F("Y\n"));
-          
-          Serial.println(F("[ADIM 5/7] X2 pozisyonuna gidiliyor...\n"));
-          
-          if (!moveTo(MOTOR_X, x2Hedef, 100)) {  // ← moveTo(MOTOR_X, 12000, 100)
-            Serial.println(F("✗ X motor hareket başlatılamadı!"));
-            durum = CK_KAPALI;
-            return;
-          }
-          
-          durum = CK_X2_GIDIYOR;  // ← DURUM DEĞİŞTİ!
-        }
-        else if (c == 'N' || c == 'n') {
-          Serial.println(F("N\n"));
-          Serial.println(F("✗ Çift kayıt iptal edildi!\n"));
-          durum = CK_KAPALI;
-        }
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-Y
-
-[ADIM 5/7] X2 pozisyonuna gidiliyor...
-```
-
-#### ❓ PEKI 'N' TUŞLASAYDIK?
-```
-[SENARYO] Kullanıcı 'N' yazdı (X2'ye gitmek istemedi)
-
-[NE OLUR]
-  durum = CK_KAPALI
-  
-[MOTORLAR NE DURUMDA?]
-  X motoru: 5000 pozisyonunda (Kayıt1 pozisyonu)
-  BIG motoru: 16000 pozisyonunda (Kayıt1 bittiği yer)
-  Z motoru: Nerede kaldıysa orada
-  
-[VERİLER NE DURUMDA?]
-  ✅ Kayıt1: Tamamen kaydedildi (kayit1 dizisi dolu)
-  ❌ Kayıt2: Boş (henüz alınmadı)
-  ❌ Global A0_min/max: Henüz hesaplanmadı
-  
-[KULLANICI NE YAPABİLİR?]
-  1. E → Encoder'ları kontrol et
-  2. CK → Tekrar çift kayıt başlat (Kayıt1 tekrar alınır, önceki kayıt kaybolur!)
-  3. S → Acil durdur
-  
-[ÖNEMLİ NOT]
-  Kayıt1 verileri kayit1[] dizisinde kayıtlı.
-  ANCAK Global A0 hesaplanmadığı için CO komutu çalışmaz!
-  CO komutu için her iki kayıt da gerekli.
-```
-
----
-
-### ⚡ [ADIM 8/14] ckRun() - CK_X2_GIDIYOR DURUMU
-
-**NOT:** Bu aşama CK_X1_GIDIYOR ile aynı mantıkta çalışır. Tekrar etmeyeceğim, özet geçeceğim.
-
-```
-[ÖZET]
-  1. X motoru 12000 pozisyonuna gidiyor (moveTo çalışıyor)
-  2. ckRun() her loop'ta moveToBittiMi(MOTOR_X) kontrol ediyor
-  3. X motoru hedefe ulaştı → durum = CK_X2_ONAY2_BEKLE
-```
-
-**EKRANDA:**
-```
-✓ X2 pozisyonuna ulaşıldı!
-
-  Mevcut X: 12000
-
-[ADIM 6/7] Kayıt2 hazır.
-───────────────────────────────────────────────
-  Kayıt2'yi başlatmak için 'Y' tuşuna basın.
-  İptal için 'N' tuşuna basın.
-  > _
-```
-
----
-
-### ⚡ [ADIM 9/14] CK_X2_ONAY2_BEKLE - KULLANICI 'Y' TUŞLADI
-
-**NOT:** Bu aşama CK_X1_ONAY_BEKLE ile aynı mantıkta çalışır. Özet geçiyorum.
-
-```
-[ÖZET]
-  1. Kullanıcı 'Y' yazdı
-  2. kayitBaslat(yon2) çağrıldı → kayitBaslat(1) → Geri yön (16000→0)
-  3. durum = CK_KAYIT2_CALISIYOR
-```
-
----
-
-### ⚡ [ADIM 10/14] kayitRun() - KAYIT2 ALINIYOR
-
-**NOT:** Kayıt2, Kayıt1 ile aynı mantıkta alınır. Fark: BIG motor geri yönde (16000→0)
-
-```
-[ÖZET]
-  1. BIG motor 16000'den 0'a gidiyor (geri yön)
-  2. Her 160 pulse'da bir örnek alınıyor
-  3. 101 örnek alındı → durum = KAYIT_TAMAMLANDI
-```
-
-**EKRANDA:**
-```
-[0] ENC: 15840 | A0: 789
-[1] ENC: 15680 | A0: 783
-[2] ENC: 15520 | A0: 777
-...
-[99] ENC: 160 | A0: 518
-[100] ENC: 0 | A0: 512
-
-[KAYIT] Tamamlandı! ✓
-```
-
----
-
-### ⚡ [ADIM 11/14] ckRun() - CK_KAYIT2_CALISIYOR → TAMAMLANDI
-
-#### [11.1] Kayıt2 Tamamlandı
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_KAYIT2_CALISIYOR:
-      if (kayitTamamlandiMi()) {  // EVET!
-        // ✅ KAYIT2 VERİLERİNİ KOPYALA
-        
-        const KM_Sample* kayitVerisi = kayitVerileri();
-        
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          kayit2[i].enc = kayitVerisi[i].enc;
-          kayit2[i].a0 = kayitVerisi[i].a0;
-        }
-        
-        Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-        Serial.println(F("║              KAYIT2 TAMAMLANDI                 ║"));
-        Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-        Serial.println(F("  ✓ 101 örnek Kayıt2'ye kopyalandı.\n"));
-        
-        // ✅ GLOBAL A0_MIN/MAX HESAPLA
-        globalA0Min = 1023;
-        globalA0Max = 0;
-        
-        // Kayıt1'den min/max bul
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          if (kayit1[i].a0 < globalA0Min) globalA0Min = kayit1[i].a0;
-          if (kayit1[i].a0 > globalA0Max) globalA0Max = kayit1[i].a0;
-        }
-        
-        // Kayıt2'den min/max bul
-        for (uint16_t i = 0; i < KAYIT_ORNEK_SAYISI; i++) {
-          if (kayit2[i].a0 < globalA0Min) globalA0Min = kayit2[i].a0;
-          if (kayit2[i].a0 > globalA0Max) globalA0Max = kayit2[i].a0;
-        }
-        
-        Serial.println(F("[ADIM 7/7] Global A0 Aralığı Hesaplandı"));
-        Serial.println(F("───────────────────────────────────────────────"));
-        Serial.print(F("  A0_min : "));
-        Serial.println(globalA0Min);  // Örn: 512
-        Serial.print(F("  A0_max : "));
-        Serial.println(globalA0Max);  // Örn: 789
-        Serial.println(F("───────────────────────────────────────────────\n"));
-        
-        Serial.println(F("╔════════════════════════════════════════════════╗"));
-        Serial.println(F("║         ÇİFT KAYIT BAŞARIYLA TAMAMLANDI!      ║"));
-        Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-        Serial.println(F("  ✅ Kayıt1: 101 örnek (X1 pozisyonu)"));
-        Serial.println(F("  ✅ Kayıt2: 101 örnek (X2 pozisyonu)"));
-        Serial.println(F("  ✅ Global A0 aralığı: 512 - 789"));
-        Serial.println(F("\n  CO komutu ile oynatmaya hazır!\n"));
-        
-        durum = CK_TAMAMLANDI;  // ← DURUM DEĞİŞTİ!
-      }
-      break;
-  }
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║              KAYIT2 TAMAMLANDI                 ║
-╚════════════════════════════════════════════════╝
-
-  ✓ 101 örnek Kayıt2'ye kopyalandı.
-
-[ADIM 7/7] Global A0 Aralığı Hesaplandı
-───────────────────────────────────────────────
-  A0_min : 512
-  A0_max : 789
-───────────────────────────────────────────────
-
-╔════════════════════════════════════════════════╗
-║         ÇİFT KAYIT BAŞARIYLA TAMAMLANDI!      ║
-╚════════════════════════════════════════════════╝
-
-  ✅ Kayıt1: 101 örnek (X1 pozisyonu)
-  ✅ Kayıt2: 101 örnek (X2 pozisyonu)
-  ✅ Global A0 aralığı: 512 - 789
-
-  CO komutu ile oynatmaya hazır!
-```
-
----
-
-### 🎯 CK KOMUTU SON DURUM
-
-#### ckRun() - CK_TAMAMLANDI
-```cpp
-void ckRun() {
-  switch (durum) {
-    case CK_TAMAMLANDI:
-      return;  // Hiçbir şey yapma (bekleme modunda)
-  }
-}
-```
-
-#### ckAktifMi() ve ckTamamlandiMi()
-```cpp
-bool ckAktifMi() {
-  return (durum != CK_KAPALI && durum != CK_TAMAMLANDI);
-  // false (kayıt tamamlandı)
-}
-
-bool ckTamamlandiMi() {
-  return (durum == CK_TAMAMLANDI);
-  // true
-}
-```
-
-#### Veri Durumu
-```
-✅ kayit1[] dizisi: 101 örnek (X1=5000 pozisyonu, ileri yön)
-✅ kayit2[] dizisi: 101 örnek (X2=12000 pozisyonu, geri yön)
-✅ globalA0Min: 512
-✅ globalA0Max: 789
-```
-
-#### Motor Durumu
-```
-X motoru: 12000 pozisyonunda (Kayıt2 pozisyonu)
-BIG motoru: 0 pozisyonunda (Kayıt2 bittiği yer)
-Z motoru: Nerede kaldıysa orada
-```
-
----
-
-## 🎬 CO KOMUTU: ÇİFT OYNATMA (İLK DEPO)
-
-### BAŞLANGIÇ DURUMU
-```
-CK komutu tamamlandı
-Kayıt1 ve Kayıt2 hazır
-Serial bekliyor
-```
-
-### ⚡ [ADIM 1/∞] 'CO' TUŞLANDI
-
-#### [1.1] Serial Buffer'da 'C' Geldi
-```cpp
-// loop()
-if (Serial.available()) {  // true
-  char cmd = Serial.read();  // cmd = 'C'
-  
-  switch (cmd) {
-    case 'C':
-      if (Serial.available() == 0) delay(50);
-      
-      if (Serial.available() > 0) {
-        char c2 = Serial.read();  // c2 = 'O'
-        
-        if (c2 == 'O' || c2 == 'o') {
-          handleCiftOynatma();  // ← Çağrıldı!
-        }
-      }
-      break;
-  }
-}
-```
-
-#### [1.2] handleCiftOynatma() İçinde
-```cpp
-void handleCiftOynatma() {
-  // [KONTROL 1] Kayıt var mı?
-  if (!ckTamamlandiMi()) {
-    Serial.println(F("\n✗ Kayıt yok! Önce CK komutu ile kayıt alın."));
-    return;
-  }
-  
-  // [KONTROL 2] Başka işlem var mı?
-  if (coAktifMi() || kayitAktifMi() || oynatmaAktifMi()) {
-    Serial.println(F("\n✗ Başka bir işlem devam ediyor!"));
-    return;
-  }
-  
-  // [EKRAN] Parametreleri göster
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║         ÇİFT OYNATMA PARAMETRELERİ             ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝"));
-  
-  Serial.print(F("  X1 Pozisyonu   : "));
-  Serial.println(x1Pos);  // 5000
-  
-  Serial.print(F("  X2 Pozisyonu   : "));
-  Serial.println(x2Pos);  // 12000
-  
-  Serial.print(F("  Global A0 Min  : "));
-  Serial.println(ckGlobalA0Min());  // 512
-  
-  Serial.print(F("  Global A0 Max  : "));
-  Serial.println(ckGlobalA0Max());  // 789
-  
-  Serial.println(F("───────────────────────────────────────────────"));
-  Serial.println(F("  BIG Freq Min   : "));
-  Serial.print(F("  [Mevcut: "));
-  Serial.print(bigFreqMin);
-  Serial.println(F("]"));
-  Serial.print(F("  Yeni değer (Enter=değiştirme): "));
-  
-  // ... (parametre değiştirme arayüzü - özet geçiyorum)
-  
-  Serial.println(F("\nBaşlatılsın mı? (Y/N)"));
-  Serial.print(F("> "));
-  
-  while (Serial.available() == 0) delay(10);
-  
-  char onay = Serial.read();  // onay = 'Y'
-  Serial.println(onay);
-  
-  if (onay == 'Y' || onay == 'y') {
-    coBaslat(x1Pos, x2Pos);  // ← coBaslat() çağrıldı!
-    Serial.println(F("\n✓ Çift oynatma başlatıldı!"));
-  }
-}
-```
-
-**EKRANDA:**
-```
-╔════════════════════════════════════════════════╗
-║         ÇİFT OYNATMA PARAMETRELERİ             ║
-╚════════════════════════════════════════════════╝
-  X1 Pozisyonu   : 5000
-  X2 Pozisyonu   : 12000
-  Global A0 Min  : 512
-  Global A0 Max  : 789
-───────────────────────────────────────────────
-  ... (parametre ayarlama)
-  
-Başlatılsın mı? (Y/N)
-> Y
-
-✓ Çift oynatma başlatıldı!
-```
-
----
-
-### ⚡ [ADIM 2/∞] coBaslat() - İLK DEPO (Z SIFIRLAMA VAR)
-
-#### [2.1] coBaslat(5000, 12000) İçinde
-```cpp
-// CiftOynatmaModulu.cpp
-void coBaslat(long x1Enc, long x2Enc) {
-  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║          ÇİFT OYNATMA BAŞLATILIYOR             ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-  
-  // [KONTROL 1] Encoder'lar var mı?
-  if (bigEnc == nullptr || xEnc == nullptr || zEnc == nullptr) {
-    Serial.println(F("✗ Encoder hatası!"));
-    return;
-  }
-  
-  // [KONTROL 2] Parametreler var mı?
-  if (bigFreqMinPtr == nullptr || zEncMaxPtr == nullptr) {
-    Serial.println(F("✗ Parametre hatası!"));
-    return;
-  }
-  
-  // [PARAMETRELER] Kaydet
-  x1Hedef = 5000;
-  x2Hedef = 12000;
-  globalA0Min = ckGlobalA0Min();  // 512
-  globalA0Max = ckGlobalA0Max();  // 789
-  
-  // [KRİTİK] Z sıfırlama bayrağı kontrolü
-  if (!zSifirlandiMi) {
-    // ✅ İLK DEPO: Z sıfırlama yapılacak
-    
-    Serial.println(F("\n[İLK DEPO] Z sıfırlama aşaması gerekli."));
-    Serial.println(F("───────────────────────────────────────────────"));
-    Serial.println(F("  1. BIG & X motorları A0_min konumuna gidecek"));
-    Serial.println(F("  2. Torch manuel olarak yüzeye değdirilecek"));
-    Serial.println(F("  3. Z encoder sıfırlanacak (Z=0)"));
-    Serial.println(F("───────────────────────────────────────────────\n"));
-    
-    // [ADIM 1] BIG & X → A0_min konumuna git
-    Serial.println(F("[ADIM 1] A0_min konumuna gidiliyor..."));
-    
-    // A0_min konumu için BIG encoder pozisyonu (Kayıt1 veya Kayıt2'den)
-    const CK_Sample* k1 = ckKayit1Verileri();
-    const CK_Sample* k2 = ckKayit2Verileri();
-    
-    // A0_min'e en yakın encoder pozisyonunu bul
-    long bigHedef = k1[0].enc;  // Örn: Kayıt1'in ilk pozisyonu
-    
-    if (!moveTo(MOTOR_B, bigHedef, 100)) {
-      Serial.println(F("✗ BIG motor hareket başlatılamadı!"));
-      return;
-    }
-    
-    // X1 pozisyonuna git
-    if (!moveTo(MOTOR_X, x1Hedef, 100)) {
-      Serial.println(F("✗ X motor hareket başlatılamadı!"));
-      return;
-    }
-    
-    durum = CO_Z_SIFIRLAMA_HAZIRLIK;  // ← DURUM DEĞİŞTİ!
-  }
-  else {
-    // ✅ SONRAKI DEPOLAR: Z sıfırlama YOK
-    // (Bu bölümü ayrıca anlatacağım)
-  }
-}
-```
-
----
-
-### ⚡ [ADIM 3/∞] coRun() - CO_Z_SIFIRLAMA_HAZIRLIK
-
-#### [3.1] loop() → coRun() Aktif
-```cpp
-void loop() {
-  moveToRun();  // ← BIG & X motorları hareket ediyor
-  coRun();      // ← CO_Z_SIFIRLAMA_HAZIRLIK kontrol ediyor
-  ...
-}
-```
-
-#### [3.2] coRun() - Motorlar Hareket Ediyor
-```cpp
-void coRun() {
-  switch (durum) {
-    case CO_Z_SIFIRLAMA_HAZIRLIK:
-      if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {
-        // Her ikisi de durdu mu? Henüz değil...
-      }
-      break;
-  }
-}
-```
-
-**DÖNGÜ:** moveToRun() motorları işliyor, coRun() bekliyor...
-
-#### [3.3] Motorlar Hedefe Ulaştı
-```cpp
-case CO_Z_SIFIRLAMA_HAZIRLIK:
-  if (!moveToAktifMi(MOTOR_B) && !moveToAktifMi(MOTOR_X)) {  // EVET!
-    Serial.println(F("✓ A0_min konumuna ulaşıldı!\n"));
-    Serial.print(F("  BIG: "));
-    Serial.println(bigEnc->getPosition());  // Örn: 160
-    Serial.print(F("  X  : "));
-    Serial.println(xEnc->getPosition());  // 5000
-    
-    Serial.println(F("\n[ADIM 2] Manuel Torch Sürme"));
-    Serial.println(F("───────────────────────────────────────────────"));
-    Serial.println(F("  Bu nokta en düşük A0 değerinin olduğu yer."));
-    Serial.println(F("  Torcu manuel olarak (M, P komutları ile)"));
-    Serial.println(F("  yüzeye yaklaştırın.\n"));
-    Serial.println(F("  Torch yüzeye değdiğinde 'Y' tuşlayın."));
-    Serial.println(F("  (Z encoder sıfırlanacak: Z=0)"));
-    Serial.println(F("───────────────────────────────────────────────"));
-    Serial.print(F("  > Hazır mısınız? (Y/N): "));
-    
-    durum = CO_Z_SIFIRLAMA_ONAY;  // ← DURUM DEĞİŞTİ!
-  }
-  break;
-```
-
----
-
-### ⚡ [ADIM 4/∞] Kullanıcı M Komutu ile Z'yi İndiriyor
-
-**NOT:** Bu adım arada gerçekleşir, coRun() bekliyor.
-
-#### [4.1] Kullanıcı 'M' Tuşladı
-```
-Serial: M
-→ Motor: Z
-→ Hedef: -500
-→ Max Hz: 50
-
-moveTo(MOTOR_Z, -500, 50)  // ← Zaten anlattık (M komutu bölümü)
-```
-
-#### [4.2] loop() → moveToRun() Z'yi İşliyor
-```cpp
-void loop() {
-  moveToRun();  // ← Z motoru aşağı iniyor
-  coRun();      // ← CO_Z_SIFIRLAMA_ONAY (Serial bekliyor)
-  ...
-}
-```
-
-#### [4.3] Z Motoru Hedefe Ulaştı
-```
-moveToBittiMi(MOTOR_Z) = true
-Z encoder = -500
-(Torch yüzeye değdi!)
-```
-
----
-
-### ⚡ [ADIM 5/∞] Kullanıcı 'Y' Tuşladı → Z Sıfırlama
-
-#### [5.1] coRun() - CO_Z_SIFIRLAMA_ONAY
-```cpp
-case CO_Z_SIFIRLAMA_ONAY:
-  if (Serial.available()) {  // Kullanıcı 'Y' yazdı
-    char c = Serial.read();  // c = 'Y'
-    
-    if (c == 'Y' || c == 'y') {
-      Serial.println(F("Y\n"));
-      
-      // [KRİTİK] Z ENCODER'I SIFIRLA
-      zEnc->reset();  // ← Z encoder = 0
-      
-      // [KRİTİK] BAYRAK SET ET
-      zSifirlandiMi = true;  // ← Artık bir daha Z sıfırlamaya gerek yok!
-      
-      Serial.println(F("✓ Z encoder sıfırlandı! (Z = 0)"));
-      Serial.println(F("  Bu nokta artık kalıcı referans.\n"));
-      
-      // Z'yi güvenlik için yukarı kaldır
-      Serial.println(F("[ADIM 3] Kayıt1 Geçişi: Z Yukarı"));
-      
-      long zMaxPos = mapA0ToZ(globalA0Max);
-      // globalA0Max = 789 → zMaxPos ≈ 8688
-      
-      Serial.print(F("  Z: 0 → "));
-      Serial.print(zMaxPos);
-      Serial.println(F(" (Güvenlik - Yukarı)"));
-      
-      moveTo(MOTOR_Z, zMaxPos, 2000);  // ← Z yukarı çıkıyor
-      
-      durum = CO_K1_GECIS_Z_YUKARI;  // ← DURUM DEĞİŞTİ!
-    }
-    else if (c == 'N' || c == 'n') {
-      Serial.println(F("N\n"));
-      Serial.println(F("✗ Çift oynatma iptal edildi!\n"));
-      durum = CO_KAPALI;  // ← İptal!
-    }
-  }
-  break;
-```
-
-#### ❓ PEKI 'N' TUŞLASAYDIK?
-```
-[NE OLUR]
-  durum = CO_KAPALI
-  Motorlar durur (neredeyse orada kalır)
-  
-[KULLANICI NE YAPABİLİR?]
-  1. M/P → Z'yi tekrar manuel sürer
-  2. CO → Tekrar başlar (Z sıfırlama aşaması tekrar gelir çünkü zSifirlandiMi = false)
-  3. S → Acil durdur (tüm motorlar)
-```
-
----
-
-### ⚡ [ADIM 6-∞] Kayıt1 ve Kayıt2 Oynatma
-
-**NOT:** Oynatma aşamaları (Kayıt1 yükle, oynat, Z hareket, vb.) TAMAMEN AYNI mantıkla çalışır:
-- moveTo() → Zaten anlattık
-- oynatmaBaslatGercek() → OynatmaModulu kullanır (segment segment)
-- Her durum geçişi benzer mantık
-
-**DURUM MAKİNESİ GEÇİŞLERİ:**
-```
-CO_K1_GECIS_Z_YUKARI       → Z yukarı çıkıyor
-CO_K1_GECIS_Z_YUKARI_BEKLE → Z bitti mi?
-CO_K1_GECIS_BIG_X          → BIG & X → Kayıt1[0]
-CO_K1_GECIS_BIG_X_BEKLE    → BIG & X bitti mi?
-CO_K1_GECIS_Z_ASAGI        → Z → Kayıt1[0].a0
-CO_K1_GECIS_Z_ASAGI_BEKLE  → Z bitti mi?
-CO_KAYIT1_YUKLENIYOR       → Kayıt1 verilerini OynatmaModulu'ne yükle
-CO_KAYIT1_OYNATIYOR        → oynatmaRun() aktif
-CO_K2_GECIS_Z_YUKARI       → Z yukarı (Kayıt2'ye geçiş)
-...
-CO_KAYIT2_OYNATIYOR        → oynatmaRun() aktif
-CO_TAMAMLANDI              → Bitti!
-```
-
-**DETAY:** Bu aşamaları özet geçiyorum çünkü tekrar oluyor. Sorarsan detaylıca anlatabilirim!
-
----
-
-## 🔄 CO KOMUTU: ÇİFT OYNATMA (SONRAKI DEPOLAR)
-
-### BAŞLANGIÇ DURUMU
-```
-İlk depo tamamlandı (zSifirlandiMi = true)
-Yeni kayıt alındı (CK komutu çalıştı)
-coZSifirlamaReset() çağrıldı → zSifirlandiMi = false
-CO komutu tekrar çağrıldı
-```
-
-### ⚡ FARK: Z SIFIRLAMA YOK!
-
-#### coBaslat() İçinde
-```cpp
-void coBaslat(long x1Enc, long x2Enc) {
-  // ... (kontroller)
-  
-  if (!zSifirlandiMi) {
-    // [İLK DEPO YOLU]
-    // Z sıfırlama aşaması...
-  }
-  else {
-    // [SONRAKI DEPOLAR YOLU] ← BURAYA GİRER!
-    
-    Serial.println(F("\n[SONRAKI DEPO] Z sıfırlama atlanıyor."));
-    Serial.println(F("  Z encoder zaten kalibre edildi.\n"));
-    
-    // Direkt Kayıt1 geçişine başla
-    Serial.println(F("[ADIM 1] Kayıt1 Geçişi: Z Yukarı"));
-    
-    long zMaxPos = mapA0ToZ(globalA0Max);
-    moveTo(MOTOR_Z, zMaxPos, 2000);
-    
-    durum = CO_K1_GECIS_Z_YUKARI;  // ← Direkt geçiş aşamasına!
-  }
-}
-```
-
-**ÖZET:** Sonraki depolarda Z sıfırlama aşaması atlanır, direkt oynatmaya geçilir.
-
----
-
-## 🚨 OLASI SORUNLAR VE ÇÖZÜMLERİ
-
-### ❌ SORUN 1: "Encoder hatası!"
-```
-[SEBEP] Encoder pointer'ları null
-[ÇÖZÜM] setup() içinde ckEncoderSetup(), coEncoderSetup() çağrıldı mı?
-```
-
-### ❌ SORUN 2: "Başka bir işlem devam ediyor!"
-```
-[SEBEP] Başka bir modül aktif (CK, CO, Kayıt, Oynatma)
-[ÇÖZÜM] Mevcut işlemi bitir veya S komutu ile durdur
-```
-
-### ❌ SORUN 3: "Kayıt yok!"
-```
-[SEBEP] CK komutu çalıştırılmadan CO çalıştırıldı
-[ÇÖZÜM] Önce CK komutu ile kayıt al
-```
-
-### ❌ SORUN 4: Motor hareket etmiyor
-```
-[SEBEP 1] Enable pin HIGH (motor devre dışı)
-[ÇÖZÜM] pulseAt() enable pinini LOW yapıyor mu kontrol et
-
-[SEBEP 2] pulseAt() çağrılmıyor
-[ÇÖZÜM] moveToRun() loop'ta çağrılıyor mu?
-
-[SEBEP 3] Frekans çok düşük (1 Hz)
-[ÇÖZÜM] Hız parametresini artır
-```
-
-### ❌ SORUN 5: Z sıfırlama her depoda tekrar istiyor
-```
-[SEBEP] zSifirlandiMi bayrağı sıfırlanmış
-[ÇÖZÜM] CK komutu sonunda coZSifirlamaReset() çağrılıyor, bu normal.
-        Yeni kayıt alındığında Z sıfırlama tekrar yapılmalı.
-```
-
-### ❌ SORUN 6: Segment ortasında duruyor
-```
-[SEBEP] pulseAt() arka plan modu çağrılmıyor
-[ÇÖZÜM] moveToRun() her loop'ta çağrıldığından emin ol
-```
-
-### ❌ SORUN 7: Serial.available() sonsuz döngüde takılıyor
-```
-[SEBEP] Kullanıcı hiçbir şey yazmıyor
-[ÇÖZÜM] Timeout ekle:
-  unsigned long baslangic = millis();
-  while (Serial.available() == 0) {
-    delay(10);
-    if (millis() - baslangic > 30000) {  // 30 sn timeout
-      Serial.println("Timeout!");
-      return;
-    }
-  }
-```
-
----
-
-## 🔍 PROJE TUTARSIZLIKLARI
-
-### ✅ GENEL DURUM: Proje temiz ve tutarlı!
-
-İncelediğim tüm dosyalarda (main.cpp, CiftKayitModulu.cpp, CiftOynatmaModulu.cpp, KayitModulu.cpp, MoveTo.cpp, PulseAt.cpp, OynatmaModulu.cpp) tutarsızlık görmedim.
-
-**GÜÇLÜ YÖNLER:**
-1. ✅ Durum makineleri doğru implement edilmiş
-2. ✅ Non-blocking yapı her yerde korunmuş
-3. ✅ Edge detection (bittiMi fonksiyonları) doğru çalışıyor
-4. ✅ Encoder pointer'ları ve parametre pointer'ları düzenli yönetiliyor
-5. ✅ Serial debug çıktıları kapsamlı ve anlaşılır
-
-**DİKKAT EDİLMESİ GEREKENLER:**
-1. ⚠️ **pulseAt() arka plan modu:** Her loop'ta çağrılması kritik!
-   ```cpp
-   // ✅ DOĞRU
-   loop() {
-     moveToRun();  // ← İçinde pulseAt(0,0,0) çağrılıyor
-     kayitRun();
-     ...
-   }
+╔═══════════════════════════════════════════════════════════════╗
+║           DATA EXCHANGE TEST KILAVUZU                         ║
+║           (SADECE SERİAL MONİTÖR - PYTHON YOK!)              ║
+╚═══════════════════════════════════════════════════════════════╝
+
+📋 TEST SENARYOSU:
+  - 161 örnek
+  - bigEnc: 0, 100, 200, ..., 16000 (100'er artış)
+  - A0: 450-950 arası rastgele değerler
+
+═══════════════════════════════════════════════════════════════
+⚙️ ADIM 1: DOSYALARI YÜKLE
+═══════════════════════════════════════════════════════════════
+
+1. Arduino IDE'de bu 3 dosyayı projeye ekle:
+   ✅ DataExchange.h
+   ✅ DataExchange.cpp  
+   ✅ main.cpp (mevcut olanı değiştir)
+
+2. Derle ve Arduino'ya yükle (→)
+
+3. Serial Monitor'ü aç:
+   - Baud rate: 115200
+   - Line ending: "Newline" veya "Both NL & CR"
+
+═══════════════════════════════════════════════════════════════
+📥 ADIM 2: TEST VERİSİNİ YÜKLE (DI1 KOMUTU)
+═══════════════════════════════════════════════════════════════
+
+1. Serial Monitor'de yaz:
+   ┌─────────────────────────┐
+   │ DI1                     │
+   └─────────────────────────┘
+   [ENTER'a bas]
+
+2. Arduino şu mesajı gösterecek:
+   ┌─────────────────────────────────────────────┐
+   │ ╔════════════════════════════════════════╗  │
+   │ ║   KAYIT1 TXT IMPORT BAŞLIYOR          ║  │
+   │ ╚════════════════════════════════════════╝  │
+   │                                             │
+   │ TXT içeriğini SATIR SATIR yapıştırın:      │
+   │   1. İlk satır: Örnek sayısı (örn: 10)     │
+   │   2. Sonraki satırlar: bigEnc,a0           │
+   │   3. Her satırdan sonra ENTER basın!       │
+   │                                             │
+   │ ⏳ HAZIR! İlk satırı gönderin...            │
+   └─────────────────────────────────────────────┘
+
+3. test_kayit_161.txt dosyasını aç (Notepad ile)
+
+4. İLK SATIRI KOPYALA (161):
+   ┌─────────────────────────┐
+   │ 161                     │
+   └─────────────────────────┘
+   Serial Monitor'e YAPIŞTIR → [ENTER]
+
+5. Arduino yanıt verecek:
+   ┌─────────────────────────────────────────────┐
+   │ ✓ Örnek sayısı: 161                        │
+   │                                             │
+   │ ⏳ Şimdi veri satırlarını gönderin...       │
+   │    (Her satırdan sonra ENTER'a basın)      │
+   └─────────────────────────────────────────────┘
+
+6. ŞİMDİ VERİ SATIRLARINI YAPIŞTIR:
+
+   ÖNEMLİ: Tüm 161 satırı BİRDEN kopyala/yapıştır yapabilirsin!
    
-   // ❌ YANLIŞ
-   loop() {
-     if (motor_aktif) {  // ← Koşula bağlama!
-       moveToRun();
-     }
-   }
-   ```
+   Test dosyasından satır 2-162'yi seç:
+   ┌─────────────────────────┐
+   │ 0,659                   │
+   │ 100,828                 │
+   │ 200,574                 │
+   │ ...                     │
+   │ 16000,xxx               │
+   └─────────────────────────┘
+   
+   HEPSİNİ SEÇ → KOPYALA → Serial Monitor'e YAPIŞTIR
 
-2. ⚠️ **Z sıfırlama bayrağı:** Yeni kayıt alındığında sıfırlanmalı
-   ```cpp
-   // ✅ DOĞRU (CiftKayitModulu.cpp)
-   void ckBaslat(...) {
-     coZSifirlamaReset();  // ← İlk satır!
-     ...
-   }
-   ```
+   Arduino her satırı işlerken gösterecek:
+   ┌─────────────────────────────────────────────┐
+   │ [1/161] ✓ 0,659                            │
+   │ [2/161] ✓ 100,828                          │
+   │ [3/161] ✓ 200,574                          │
+   │ ...                                         │
+   │ [161/161] ✓ 16000,xxx                      │
+   └─────────────────────────────────────────────┘
 
-3. ⚠️ **Global A0 hesaplama:** Her iki kayıt da tamamlanınca yapılmalı
-   ```cpp
-   // ✅ DOĞRU (CiftKayitModulu.cpp - CK_KAYIT2_CALISIYOR içinde)
-   if (kayitTamamlandiMi()) {
-     // Kayıt2 verilerini kopyala
-     // Global A0_min/max hesapla ← BURADA
-   }
-   ```
+7. Tamamlandığında:
+   ┌─────────────────────────────────────────────┐
+   │ ╔════════════════════════════════════════╗  │
+   │ ║      ✓ IMPORT TAMAMLANDI!            ║  │
+   │ ╚════════════════════════════════════════╝  │
+   │   Yüklenen veri: 161 örnek                 │
+   └─────────────────────────────────────────────┘
 
----
+═══════════════════════════════════════════════════════════════
+✅ ADIM 3: DOĞRULA (KL KOMUTU)
+═══════════════════════════════════════════════════════════════
 
-## 🎓 ÖZET: CK-CO SİSTEMİ
+1. Serial Monitor'de yaz:
+   ┌─────────────────────────┐
+   │ KL                      │
+   └─────────────────────────┘
+   [ENTER'a bas]
 
-### CK KOMUTU (Çift Kayıt)
-```
-[AŞAMALAR]
-  1. X1'e git → Y/N → Kayıt1 al (101 örnek)
-  2. X2'ye git → Y/N → Kayıt2 al (101 örnek)
-  3. Global A0_min/max hesapla
+2. Kayıt1 verilerini göreceksin:
+   ┌─────────────────────────────────────────────┐
+   │ ═══════════════════════════════════════    │
+   │   KAYIT1 VERİLERİ                          │
+   │ ═══════════════════════════════════════    │
+   │ [0] BIG=0, A0=659                          │
+   │ [1] BIG=100, A0=828                        │
+   │ [2] BIG=200, A0=574                        │
+   │ ...                                         │
+   │ [160] BIG=16000, A0=xxx                    │
+   └─────────────────────────────────────────────┘
 
-[SONUÇ]
-  ✅ kayit1[] dizisi dolu
-  ✅ kayit2[] dizisi dolu
-  ✅ Global A0 aralığı belirlendi
-```
+3. KONTROL ET:
+   ✅ İlk bigEnc = 0 mı?
+   ✅ Son bigEnc = 16000 mi?
+   ✅ A0 değerleri 450-950 arası mı?
+   ✅ 161 örnek var mı?
 
-### CO KOMUTU (Çift Oynatma)
-```
-[İLK DEPO]
-  1. BIG & X → A0_min konumuna
-  2. Manuel torch sürme → Y/N → Z=0
-  3. Kayıt1 Geçişi: Z yukarı → BIG & X → Kayıt1[0] → Z aşağı
-  4. Kayıt1 oynat (segment segment)
-  5. Kayıt2 Geçişi: Z yukarı → BIG & X → Kayıt2[0] → Z aşağı
-  6. Kayıt2 oynat
+═══════════════════════════════════════════════════════════════
+📤 ADIM 4: DIŞA AKTAR (DE1 KOMUTU) - BONUS TEST
+═══════════════════════════════════════════════════════════════
 
-[SONRAKI DEPOLAR]
-  - Z sıfırlama atlanır (zSifirlandiMi = true)
-  - Direkt Kayıt1 geçişine başlar
-```
+1. Serial Monitor'de yaz:
+   ┌─────────────────────────┐
+   │ DE1                     │
+   └─────────────────────────┘
 
-### ARKA PLAN İŞLEYİCİLERİ (Her loop'ta)
-```cpp
-moveToRun();   // MoveTo segment işleme
-kayitRun();    // Kayıt durum makinesi
-oynatmaRun();  // Oynatma durum makinesi
-ckRun();       // Çift Kayıt durum makinesi
-coRun();       // Çift Oynatma durum makinesi
-```
+2. Arduino kayıtları yazdıracak:
+   ┌─────────────────────────────────────────────┐
+   │ # KAYIT1 DATA                              │
+   │ # Format: BIG_ENC, A0                      │
+   │ # Ornek Sayisi: 161                        │
+   │ # ─────────────────────────────────────    │
+   │ 161                                         │
+   │ 0,659                                       │
+   │ 100,828                                     │
+   │ ...                                         │
+   └─────────────────────────────────────────────┘
 
----
+3. Bu çıktıyı kopyalayıp PC'de kaydedebilirsin!
 
-**🎉 TAMAMLANDI!** Bu dokümanda her şeyi ultra detaylı anlattım. Başka sorular varsa sor kanka! 💪
+═══════════════════════════════════════════════════════════════
+🔄 TAM TEST AKIŞI
+═══════════════════════════════════════════════════════════════
+
+  1. DI1        → Import başlat
+  2. 161        → Örnek sayısı gir
+  3. YAPIŞTIR   → 161 satır veri yapıştır (birden!)
+  4. BEKLE      → Arduino işlesin
+  5. KL         → Kontrol et
+  6. DE1        → Dışa aktar (opsiyonel)
+
+═══════════════════════════════════════════════════════════════
+❓ SORUN GİDERME
+═══════════════════════════════════════════════════════════════
+
+PROBLEM: "✗ Geçersiz format (satır X)"
+ÇÖZÜM: 
+  - Virgül (,) kullandığından emin ol
+  - Boşluk yok
+  - Format: bigEnc,a0
+
+PROBLEM: "✗ Timeout!"
+ÇÖZÜM:
+  - Serial Monitor bağlantısını kontrol et
+  - Line ending ayarını "Newline" yap
+  - Arduino'yu reset et
+
+PROBLEM: Yapıştırma çalışmıyor
+ÇÖZÜM:
+  - Serial Monitor'ü kapat/aç
+  - Küçük parçalar halinde yapıştır (10-20 satır)
+  - Veya her satırı tek tek yapıştır
+
+═══════════════════════════════════════════════════════════════
+✨ İPUCU: HIZLI YAPISTIRMA
+═══════════════════════════════════════════════════════════════
+
+Arduino Serial Monitor, yapıştırdığın TÜM satırları birden kabul eder!
+
+Yani:
+  1. "DI1" [ENTER]
+  2. "161" [ENTER]  
+  3. Tüm 161 satırı YAPIŞTIR (0,659 → 16000,xxx)
+  
+Arduino her satırı otomatik işleyecek, sen bekle!
+
+═══════════════════════════════════════════════════════════════
+🎯 BAŞARI KRİTERLERİ
+═══════════════════════════════════════════════════════════════
+
+✅ "✓ IMPORT TAMAMLANDI!" mesajını gördün mü?
+✅ "Yüklenen veri: 161 örnek" yazıyor mu?
+✅ KL komutu ile 161 örnek görüyor musun?
+✅ İlk bigEnc = 0, son bigEnc = 16000 mı?
+
+Hepsi EVET ise → SİSTEM ÇALIŞIYOR! 🎉
+
+═══════════════════════════════════════════════════════════════
+📝 NOT
+═══════════════════════════════════════════════════════════════
+
+Bu test başarılı olursa:
+  ✅ Kendi kayıtlarını da aynı şekilde yükleyebilirsin
+  ✅ PC'de düzenleyip geri yükleyebilirsin
+  ✅ Farklı A0 değerleriyle deneyebilirsin
+
+Python'a gerek YOK! Hepsi Serial Monitor'den yapılıyor! 🚀
+
+═══════════════════════════════════════════════════════════════

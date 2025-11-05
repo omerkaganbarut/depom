@@ -45,24 +45,6 @@ void coBaslat(long x1Enc, long x2Enc);
  * @brief Çift oynatma arka plan döngüsü (her loop'ta çağır!)
  */
 void coRun();
-
-/**
- * @brief Çift oynatma aktif mi?
- */
-bool coAktifMi();
-
-/**
- * @brief Çift oynatma tamamlandı mı?
- */
-bool coTamamlandiMi();
-
-/**
- * @brief Şu anki aşamayı al
- * 
- * @return uint8_t 0=Kapali, 1=Z_sifirlama, 2=Kayit1, 3=Kayit2, 4=Bitti
- */
-uint8_t coAsama();
-
 /**
  * @brief Çift oynatma işlemini durdur (acil durdurma)
  */
@@ -76,5 +58,7 @@ void coDurdur();
  *           tekrar çalışır.
  */
 void coZSifirlamaReset();
+
+
 
 #endif // CIFTOYNATMAMODULU_H

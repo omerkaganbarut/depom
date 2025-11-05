@@ -1,60 +1,125 @@
-// OynatmaModulu.cpp - v2.4 FINAL
-// ✅ X motor → Z motor değişimi
-// ✅ Dinamik mapping parametreleri
-// ✅ Serial.print sadeleştirildi
-// ✅ Derleme hatası düzeltildi
+// OynatmaModulu.cpp - v6.0 GLOBAL A0 ARALIĞI KULLANIMI
+// ═══════════════════════════════════════════════════════════════
+// GÖREV: Verilen bir kayıt listesini BIG+Z ile oynatmak
+// ✅ Global A0 aralığı kullanımı (CiftKayitModulu'nden)
+// ✅ Z sıfırlama globalA0Min'de yapıldığı için local hesap yok
+// ═══════════════════════════════════════════════════════════════
 
 #include "OynatmaModulu.h"
 #include "Config.h"
-#include "KayitModulu.h"
+#include "CiftKayitModulu.h"
 #include "PulseAt.h"
-#include "stepmotorenkoderiokuma.h"
-#include "A0Filtre.h"
+#include <Arduino.h>
 
 // ═══════════════════════════════════════════════════════════════
 // DURUM MAKİNESİ
 // ═══════════════════════════════════════════════════════════════
 enum OynatmaDurum {
-  OYNATMA_KAPALI = 0,
-  OYNATMA_HIZALAMA,
-  OYNATMA_HIZALAMA_BEKLE,
-  OYNATMA_SEGMENT_HESAPLA,
-  OYNATMA_SEGMENT_MOTOR,
-  OYNATMA_TAMAMLANDI
+  OY_KAPALI = 0,
+  OY_SEGMENT_OYNAT,
+  OY_TAMAMLANDI
 };
 
 // ═══════════════════════════════════════════════════════════════
 // STATİK DEĞİŞKENLER
 // ═══════════════════════════════════════════════════════════════
+static OynatmaDurum durum = OY_KAPALI;
 static uint16_t idx = 0;
-static OynatmaDurum durum = OYNATMA_KAPALI;
+
 
 // Encoder pointer'ları
 static StepMotorEncoder* bigEnc = nullptr;
 static StepMotorEncoder* zEnc = nullptr;
 
-// A0 aralığı
-static uint16_t a0Min = 1023;
-static uint16_t a0Max = 0;
-
-// DİNAMİK PARAMETRELER (main.cpp'den alınır)
+// Parametre pointer'ları
 static long* bigFreqMinPtr = nullptr;
 static long* bigFreqMaxPtr = nullptr;
-static long* zEncMinPtr = nullptr;
-static long* zEncMaxPtr = nullptr;
+static long* bigFreqRefPtr = nullptr; 
+// ✅ KAYIT POINTER (kayit1 veya kayit2 olabilir)
+static const CK_Sample* kayitPtr = nullptr;
+static uint16_t kayitOrnekSayisi = 0;
 
 // ═══════════════════════════════════════════════════════════════
-// GÜVENLİ MAP (64-bit overflow korumalı)
+// ✅ GLOBAL A0 ARALIĞINI
+// KULLAN (CiftKayitModulu'nden)
 // ═══════════════════════════════════════════════════════════════
-long mapSafe(long x, long in_min, long in_max, long out_min, long out_max) {
-  if (in_max == in_min) {
-    return out_min;
-  }
-  int64_t num = (int64_t)(x - in_min) * (int64_t)(out_max - out_min);
-  int64_t den = (int64_t)(in_max - in_min);
-  return (long)(num / den) + out_min;
+extern uint16_t globalA0Min;
+extern uint16_t globalA0Max;
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: GLOBAL A0 ARALIĞINA GÖRE Z MAX HESAPLA
+// ═══════════════════════════════════════════════════════════════
+static inline long hesaplaZMax() {
+  // Global A0 ARALIĞININ fiziksel Z karşılığı
+  // Örnek: globalA0Min=300, globalA0Max=550
+  //        Aralık = 550-300 = 250
+  //        Z Max = (250/1023) × 160000 = 39,100
+  
+  if (globalA0Max <= globalA0Min) return Z_ENCODER_MAX;
+  
+  // A0 aralığı
+  uint16_t a0Aralik = globalA0Max - globalA0Min;
+  
+  // A0 aralık oranı × Z_ENCODER_MAX
+  float oran = (float)a0Aralik / 1023.0;
+  long zMax = (long)(oran * Z_ENCODER_MAX);
+  
+  // Güvenlik kontrolü
+  if (zMax > Z_ENCODER_MAX) zMax = Z_ENCODER_MAX;
+  if (zMax < 1000) zMax = 1000;  // Minimum 1000 encoder
+  
+  return zMax;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// REFERANS HIZ SETUP
+// ═══════════════════════════════════════════════════════════════
+void oynatmaRefHizSetup(long* bigFreqRefPtrArg) {
+  bigFreqRefPtr = bigFreqRefPtrArg;
+}
+// ═══════════════════════════════════════════════════════════════
+// HELPER: A0 → ZEnc MAPPING (GLOBAL ARALIĞA GÖRE)
+// ═══════════════════════════════════════════════════════════════
+static inline long mapA0ToZEnc(uint16_t a0) {
+  if (a0 <= globalA0Min) return 0;
+  
+  // ✅ Dinamik Z max hesapla
+  long zMax = hesaplaZMax();
+  
+  if (a0 >= globalA0Max) return zMax;
+  
+  // globalA0Min → 0, globalA0Max → zMax
+  return map(a0, globalA0Min, globalA0Max, 0, zMax);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: A0 → BigFreq MAPPING (Ters orantılı)
+// ═══════════════════════════════════════════════════════════════
+static inline unsigned int mapA0ToBigFreq(uint16_t a0) {
+  if (bigFreqMinPtr == nullptr || bigFreqMaxPtr == nullptr) return 100;
+  if (bigFreqRefPtr == nullptr) return 100;  // ✅ YENİ KONTROL
+  
+  // A0 → mm DÖNÜŞÜM KATSAYISI
+  float mmPerA0 = A0_FIZIKSEL_ARALIK_MM / 1023.0;
+  
+  // REFERANS YARICAP (Depo kenarı çapının yarısı)
+  float yaricapRef = DEPO_KENAR_CAP_MM / 2.0;
+  
+  // A0 DEĞİŞİMİNDEN KAYNAKLANAN YARICAP DEĞİŞİMİ
+  float deltaYaricapMM = (a0 - globalA0Min) * mmPerA0;
+  
+  // GÜNCEL YARICAP
+  float yaricapMM = yaricapRef + deltaYaricapMM;
+  
+  // TERS ORANTILI HIZ HESABI
+  float sabitCarpim = yaricapRef * (*bigFreqRefPtr);  // ✅ POINTER KULLAN
+  float freq = sabitCarpim / yaricapMM;
+  
+  // ALT SINIR KONTROLÜ
+  if (freq < 10) freq = 10;
+  
+  return (unsigned int)freq;
+}
 // ═══════════════════════════════════════════════════════════════
 // ENCODER SETUP
 // ═══════════════════════════════════════════════════════════════
@@ -64,287 +129,202 @@ void oynatmaEncoderSetup(StepMotorEncoder* bigEncoder, StepMotorEncoder* zEncode
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PARAMETRE POINTER SETUP
+// PARAMETRE SETUP
 // ═══════════════════════════════════════════════════════════════
-void oynatmaParametreSetup(long* bigFreqMin, long* bigFreqMax, long* zEncMin, long* zEncMax) {
+void oynatmaParametreSetup(long* bigFreqMin, long* bigFreqMax, 
+                           long* zEncMin, long* zEncMax) {
   bigFreqMinPtr = bigFreqMin;
   bigFreqMaxPtr = bigFreqMax;
-  zEncMinPtr = zEncMin;
-  zEncMaxPtr = zEncMax;
+  
+  // NOT: zEncMin/Max fiziksel 0-160000 kullanıldığı için kullanılmıyor
+  (void)zEncMin;
+  (void)zEncMax;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// OYNATMA BAŞLATMA (GERÇEK)
+// ✅ KAYIT BAZLI OYNATMA BAŞLATMA
 // ═══════════════════════════════════════════════════════════════
-void oynatmaBaslatGercek() {
-  // Kontroller
-  if (!kayitTamamlandiMi()) {
-    Serial.println(F("✗ Kayıt yok!"));
+void oynatmaBaslatKayit(const CK_Sample* kayit, uint16_t ornekSayisi) {
+  Serial.println(F("\n[OYNATMA] Başlatılıyor..."));
+  
+  // ─────────────────────────────────────────────────────────────
+  // KONTROLLER
+  // ─────────────────────────────────────────────────────────────
+  if (kayit == nullptr) {
+    Serial.println(F("✗ Kayıt pointer hatası!"));
     return;
   }
   
-  const KM_Sample* samples = kayitVerileri();
-  
-  // A0 min/max hesapla
-  a0Min = 1023;
-  a0Max = 0;
-  for (uint16_t i = 0; i < kayitOrnekSayisi(); i++) {
-    if (samples[i].a0 < a0Min) a0Min = samples[i].a0;
-    if (samples[i].a0 > a0Max) a0Max = samples[i].a0;
+  if (ornekSayisi == 0) {
+    Serial.println(F("✗ Örnek sayısı sıfır!"));
+    return;
   }
   
-  Serial.print(F("  A0 Aralık: "));
-  Serial.print(a0Min);
-  Serial.print(F(" - "));
-  Serial.println(a0Max);
-  
-  // Encoder kontrol
   if (bigEnc == nullptr || zEnc == nullptr) {
     Serial.println(F("✗ Encoder hatası!"));
     return;
   }
   
-  // Parametre pointer kontrolü
-  if (bigFreqMinPtr == nullptr || bigFreqMaxPtr == nullptr || 
-      zEncMinPtr == nullptr || zEncMaxPtr == nullptr) {
+  if (bigFreqMinPtr == nullptr || bigFreqMaxPtr == nullptr) {
     Serial.println(F("✗ Parametre hatası!"));
     return;
   }
   
-  // Hizalama hesapla
-  long bigNow = bigEnc->getPosition();
-  long bigHedef = samples[0].enc;
-  long bigFark = bigHedef - bigNow;
-  unsigned long bigPulse = (unsigned long)abs(bigFark);
-  int bigYon = (bigFark > 0) ? 0 : 1;
+  // ─────────────────────────────────────────────────────────────
+  // KAYIT POINTER'INI SAKLA
+  // ─────────────────────────────────────────────────────────────
+  kayitPtr = kayit;
+  kayitOrnekSayisi = ornekSayisi;
   
-  long zNow = zEnc->getPosition();
-  long zHedef = mapSafe(samples[0].a0, a0Min, a0Max, *zEncMinPtr, *zEncMaxPtr);
-  long zFark = zHedef - zNow;
-  unsigned long zPulse = (unsigned long)abs(zFark);
-  int zYon = (zFark > 0) ? 0 : 1;
+  // ─────────────────────────────────────────────────────────────
+  // ✅ GLOBAL A0 BİLGİLERİNİ GÖSTER
+  // ─────────────────────────────────────────────────────────────
+  Serial.print(F("  Global A0 Min: "));
+  Serial.println(globalA0Min);
+
+  Serial.print(F("  Global A0 Max: "));
+  Serial.println(globalA0Max);
   
-  Serial.print(F("  BIG: "));
-  Serial.print(bigNow);
-  Serial.print(F(" → "));
-  Serial.println(bigHedef);
+  Serial.print(F("  A0 Aralığı: "));
+  Serial.println(globalA0Max - globalA0Min);
   
-  Serial.print(F("  Z  : "));
-  Serial.print(zNow);
-  Serial.print(F(" → "));
-  Serial.println(zHedef);
+  Serial.print(F("  Hesaplanan Z Max: "));
+  Serial.println(hesaplaZMax());
   
-  // Motorları başlat
-  if (bigPulse > 0) {
-    useMotor(MOTOR_B);
-    pulseAt(bigPulse, bigYon, 100);
-  }
+  Serial.print(F("  Örnek sayısı: "));
+  Serial.println(ornekSayisi);
   
-  if (zPulse > 0) {
-    useMotor(MOTOR_Z);
-    pulseAt(zPulse, zYon, 2000);
-  }
-  
+  // ─────────────────────────────────────────────────────────────
+  // BAŞLAT
+  // ─────────────────────────────────────────────────────────────
   idx = 0;
-  durum = OYNATMA_HIZALAMA_BEKLE;
-  Serial.println(F("✓ Başlatıldı\n"));
+  durum = OY_SEGMENT_OYNAT;
+  digitalWrite(KAYNAK_ROLE_PIN, LOW); // KAYNAK AÇ
+  
+  Serial.println(F("[OYNATMA] Segment oynatma başladı!"));
 }
 
 // ═══════════════════════════════════════════════════════════════
 // OYNATMA ARKA PLAN
 // ═══════════════════════════════════════════════════════════════
 void oynatmaRun() {
-  const KM_Sample* samples = kayitVerileri();
-  
-  int a0Start, a0End;
-  unsigned int masterFreq, slaveFreq;
-  long bigTarget, bigNow, dBig;
-  unsigned long masterPulses, slavePulses;
-  int masterYon, slaveYon;
-  long slaveHedef, zNow, dZ;
-  double fsd;
-  long fsi;
+  if (durum == OY_KAPALI || durum == OY_TAMAMLANDI) return;
+  if (kayitPtr == nullptr) return;
   
   switch (durum) {
     
-    case OYNATMA_KAPALI:
-      return;
-    
-    case OYNATMA_HIZALAMA:
-      durum = OYNATMA_HIZALAMA_BEKLE;
-      break;
-    
-    case OYNATMA_HIZALAMA_BEKLE:
-      // BIG motor arka planı
-      if (pulseAtAktifMi(MOTOR_B)) {
-        useMotor(MOTOR_B);
-        pulseAt(0, 0, 0);
-      }
-      
-      // Z motor arka planı
-      if (pulseAtAktifMi(MOTOR_Z)) {
-        useMotor(MOTOR_Z);
-        pulseAt(0, 0, 0);
-      }
-      
-      // Her ikisi de bitti mi?
+    // ───────────────────────────────────────────────────────────
+    case OY_SEGMENT_OYNAT:
+    {
       if (!pulseAtAktifMi(MOTOR_B) && !pulseAtAktifMi(MOTOR_Z)) {
-        Serial.print(F("✓ Hizalama → BIG: "));
-        Serial.print(bigEnc->getPosition());
-        Serial.print(F(" | Z: "));
-        Serial.println(zEnc->getPosition());
-        Serial.println(); 
-
-        //xsBaslat(x1Pos, 3000, 1000);
-
-
-        idx = 1;
-        durum = OYNATMA_SEGMENT_HESAPLA;
-      }
-      break;
-    
-    case OYNATMA_SEGMENT_HESAPLA:
-      Serial.print(F("\n[SEG "));
-      Serial.print(idx - 1);
-      Serial.print(F("→"));
-      Serial.print(idx);
-      Serial.println(F("]"));
-      
-      // BIG MOTOR (MASTER)
-      a0Start = samples[idx - 1].a0;
-      masterFreq = (unsigned int)mapSafe(a0Start, a0Min, a0Max, *bigFreqMinPtr, *bigFreqMaxPtr);
-      
-      bigTarget = samples[idx].enc;
-      bigNow = bigEnc->getPosition();
-      dBig = bigTarget - bigNow;
-      masterPulses = (unsigned long)abs(dBig);
-      masterYon = (dBig > 0) ? 0 : 1;
-      
-      Serial.print(F("  BIG: "));
-      Serial.print(bigNow);
-      Serial.print(F("→"));
-      Serial.print(bigTarget);
-      Serial.print(F(" ("));
-      Serial.print(masterFreq);
-      Serial.println(F("Hz)"));
-      
-      // Z MOTOR (SLAVE)
-      a0End = samples[idx].a0;
-      slaveHedef = mapSafe(a0End, a0Min, a0Max, *zEncMinPtr, *zEncMaxPtr);
-      
-      zNow = zEnc->getPosition();
-      dZ = slaveHedef - zNow;
-      slavePulses = (unsigned long)abs(dZ);
-      slaveYon = (dZ > 0) ? 0 : 1;
-      
-      Serial.print(F("  Z  : "));
-      Serial.print(zNow);
-      Serial.print(F("→"));
-      Serial.print(slaveHedef);
-      Serial.print(F(" ("));
-      
-      // Senkron hız hesapla
-      slaveFreq = 0;
-      if (masterPulses > 0 && slavePulses > 0) {
-        fsd = (double)slavePulses * (double)masterFreq / (double)masterPulses;
-        fsi = lround(fsd);
-        if (fsi < 1) fsi = 1;
-        slaveFreq = (unsigned int)fsi;
-        Serial.print(slaveFreq);
-      } else {
-        Serial.print(F("0"));
-      }
-      Serial.println(F("Hz)"));
-      
-      // Motorları başlat
-      if (masterPulses > 0 && masterFreq > 0) {
-        useMotor(MOTOR_B);
-        pulseAt(masterPulses, masterYon, masterFreq);
-      }
-      
-      if (slavePulses > 0 && slaveFreq > 0) {
-        useMotor(MOTOR_Z);
-        pulseAt(slavePulses, slaveYon, slaveFreq);
-      }
-      
-      durum = OYNATMA_SEGMENT_MOTOR;
-      break;
-    
-    case OYNATMA_SEGMENT_MOTOR:
-      // BIG motor arka planı
-      if (pulseAtAktifMi(MOTOR_B)) {
-        useMotor(MOTOR_B);
-        pulseAt(0, 0, 0);
-      }
-      
-      // Z motor arka planı
-      if (pulseAtAktifMi(MOTOR_Z)) {
-        useMotor(MOTOR_Z);
-        pulseAt(0, 0, 0);
-      }
-      
-      // Her ikisi de bitti mi?
-      if (!pulseAtAktifMi(MOTOR_B) && !pulseAtAktifMi(MOTOR_Z)) {
-        // Varış noktalarını göster
-        Serial.print(F("  ✓ BIG: "));
-        Serial.print(bigEnc->getPosition());
-        Serial.print(F(" | Z: "));
-        Serial.println(zEnc->getPosition());
         
         // Son segment mi?
-        if (idx >= kayitOrnekSayisi() - 1) {
-          durum = OYNATMA_TAMAMLANDI;
-          Serial.println(F("\n[OYNATMA] Tamamlandı! ✓\n"));
-        } else {
-          idx++;
-          durum = OYNATMA_SEGMENT_HESAPLA;
+        if (idx >= kayitOrnekSayisi - 1) {
+          Serial.println(F("[OYNATMA] ✓ Tamamlandı!"));
+          digitalWrite(KAYNAK_ROLE_PIN, HIGH); // KAYNAK KAPAT
+          durum = OY_TAMAMLANDI;
+          return;
         }
+        
+        // ✅ SEGMENT HESAPLA: idx → idx+1
+        uint16_t a0Start = kayitPtr[idx].a0;
+        uint16_t a0End = kayitPtr[idx + 1].a0;
+        
+        // BIG MOTOR
+        long bigTarget = kayitPtr[idx + 1].enc;
+        long bigNow = bigEnc->getPosition();
+        long dBig = bigTarget - bigNow;
+        unsigned long masterPulses = (unsigned long)abs(dBig);
+        int masterYon = (dBig > 0) ? 0 : 1;
+        unsigned int masterFreq = mapA0ToBigFreq(a0Start);
+        
+        // Z MOTOR
+        long zHedef = mapA0ToZEnc(a0End);
+        long zNow = zEnc->getPosition();
+        long dZ = zHedef - zNow;
+        unsigned long slavePulses = (unsigned long)abs(dZ);
+        int slaveYon = (dZ > 0) ? 0 : 1;
+        
+        // Senkron hız hesapla
+        unsigned int slaveFreq = 0;
+        if (masterPulses > 0 && slavePulses > 0) {
+          double fsd = (double)slavePulses * (double)masterFreq / (double)masterPulses;
+          slaveFreq = (unsigned int)lround(fsd);
+          if (slaveFreq < 1) slaveFreq = 1;
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // 📊 DEBUG: SEGMENT BİLGİLERİ
+        // ═══════════════════════════════════════════════════════════
+        Serial.print(F("  [SEG ")); Serial.print(idx); 
+        Serial.print(F("→")); Serial.print(idx + 1);
+        Serial.print(F("] A0: ")); Serial.print(a0Start);
+        Serial.print(F("→")); Serial.print(a0End);
+        Serial.print(F(" | BIG: ")); Serial.print(bigNow);
+        Serial.print(F("→")); Serial.print(bigTarget);
+        Serial.print(F(" (Δ=")); Serial.print(dBig);
+        Serial.print(F(", F=")); Serial.print(masterFreq); Serial.print(F("Hz)"));
+        Serial.print(F(" | Z: ")); Serial.print(zNow);
+        Serial.print(F("→")); Serial.print(zHedef);
+        Serial.print(F(" (Δ=")); Serial.print(dZ);
+        Serial.print(F(", F=")); Serial.print(slaveFreq); Serial.println(F("Hz)"));
+        
+        // MOTORLARI BAŞLAT
+        if (masterPulses > 0 && masterFreq > 0) {
+          useMotor(MOTOR_B);
+          pulseAt(masterPulses, masterYon, masterFreq);
+        }
+        
+        if (slavePulses > 0 && slaveFreq > 0) {
+          useMotor(MOTOR_Z);
+          pulseAt(slavePulses, slaveYon, slaveFreq);
+        }
+        
+        idx++;
       }
-      break;
-    
-    case OYNATMA_TAMAMLANDI:
-      return;
+      
+      // Arka plan
+      if (pulseAtAktifMi(MOTOR_B)) {
+        useMotor(MOTOR_B);
+        pulseAt(0, 0, 0);
+      }
+      
+      if (pulseAtAktifMi(MOTOR_Z)) {
+        useMotor(MOTOR_Z);
+        pulseAt(0, 0, 0);
+      }
+    }
+    break;
     
     default:
-      Serial.println(F("✗ Bilinmeyen durum!"));
-      durum = OYNATMA_KAPALI;
       break;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// OYNATMA AKTİF Mİ
+// DURUM FONKSİYONLARI
 // ═══════════════════════════════════════════════════════════════
 bool oynatmaAktifMi() {
-  return (durum != OYNATMA_KAPALI && durum != OYNATMA_TAMAMLANDI);
+  return (durum != OY_KAPALI && durum != OY_TAMAMLANDI);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// OYNATMA TAMAMLANDI MI
-// ═══════════════════════════════════════════════════════════════
 bool oynatmaTamamlandiMi() {
-  return (durum == OYNATMA_TAMAMLANDI);
+  return (durum == OY_TAMAMLANDI);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SEGMENT INDEX
-// ═══════════════════════════════════════════════════════════════
 uint16_t oynatmaSegmentIndex() {
   return idx;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// OYNATMA DURDUR
+// DURDUR
 // ═══════════════════════════════════════════════════════════════
 void oynatmaDurdur() {
-  Serial.println(F("\n[OYNATMA] Acil durduruldu!"));
+  Serial.println(F("[OYNATMA] Durduruldu!"));
   
   pulseAtDurdur(MOTOR_B);
   pulseAtDurdur(MOTOR_Z);
   
-  durum = OYNATMA_KAPALI;
-  
-  Serial.print(F("   Segment: "));
-  Serial.println(idx);
-  Serial.println();
+  durum = OY_KAPALI;
+  kayitPtr = nullptr;
 }

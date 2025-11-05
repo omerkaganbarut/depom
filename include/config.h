@@ -50,6 +50,8 @@
 #define PUSH2_PIN   26
 #define PUSH3_PIN   27
 
+//OUTPUTS
+#define KAYNAK_ROLE_PIN 14
 // Acil Durdurma (kullanılmıyor ama pin tanımlı)
 #define EMERGENCY_STOP_PIN 28
 
@@ -61,9 +63,9 @@
 // ═══════════════════════════════════════════════════════════════
 // KAYIT MODU PARAMETRELERİ
 // ═══════════════════════════════════════════════════════════════
-#define KAYIT_TOPLAM_PULSE   4000
+#define KAYIT_TOPLAM_PULSE   16000
 #define KAYIT_ARALIK         100
-#define KAYIT_HZ             200
+#define KAYIT_HZ             100
 //#define KAYIT_YON            0   //değişken oldugu için modul içine taşındı
 #define KAYIT_ORNEK_SAYISI   (KAYIT_TOPLAM_PULSE / KAYIT_ARALIK + 1)
 
@@ -89,7 +91,7 @@
 // ═══════════════════════════════════════════════════════════════
 // ANALOG FİLTRE PARAMETRELERİ (A0 için)
 // ═══════════════════════════════════════════════════════════════
-#define A0_FILTER_SAMPLES      50   // Örnek sayısı (mod hesabı için)
+#define A0_FILTER_SAMPLES      150  // Örnek sayısı (mod hesabı için)
 #define A0_FILTER_SPACING_US   150  // Örnekler arası bekleme (µs)
 
 // ═══════════════════════════════════════════════════════════════
@@ -119,7 +121,7 @@
 
 // BIG Motor (Ağır yük, kısa mesafe)
 #define ACCEL_RAMP_BIG   400    // Kısa rampa (hızlı ivmelenme)
-#define MIN_SPEED_BIG    20     // Başlangıç hızı (Hz)
+#define MIN_SPEED_BIG    100     // Başlangıç hızı (Hz)
 
 // X Motor (Hafif, uzun mesafe)
 #define ACCEL_RAMP_X     6000   // Uzun rampa (yumuşak ivmelenme)
@@ -128,6 +130,32 @@
 // Z Motor (Torch, hassas)
 #define ACCEL_RAMP_Z     6000   // Çok uzun rampa (çok yumuşak)
 #define MIN_SPEED_Z      100     // Çok düşük başlangıç (Hz)
+
+// ✅ YENİ: X Motor Salınım (Hızlı geçişler için)
+#define ACCEL_RAMP_X_SALINIM  600   // Kısa rampa (hızlı ivme)
+#define MIN_SPEED_X_SALINIM    1000   // Orta başlangıç (Hz)
+
+// ═══════════════════════════════════════════════════════════════
+// FİZİKSEL SABITLER
+// ═══════════════════════════════════════════════════════════════
+#define Z_ENCODER_MAX  160000L  // Z motor maksimum encoder (400mm için)
+#define A0_ADC_MAX     1023     // ADC çözünürlüğü
+
+// ═══════════════════════════════════════════════════════════════
+// DEPO YARIŞMA PARAMETRELERİ
+// ═══════════════════════════════════════════════════════════════
+// Depo kenarı çapı (mm) - globalA0Min konumunda torch'un çevresindeki dairenin çapı
+#define DEPO_KENAR_CAP_MM 520
+
+// BIG motor hız parametreleri
+// NOT: Hız-yarıçap ilişkisi ters orantılıdır
+// Örnek: 300mm çap (150mm yarıçap) → 200Hz
+//        600mm çap (300mm yarıçap) → 100Hz
+// Sabit çarpım = 150 × 200 = 30,000
+//#define BIG_FREQ_REF_HZ 30     // Referans hız (Hz) --> 10cm 20snkaynak için.=50
+
+// A0 sensörünün fiziksel çözünürlüğü (1023 A0 birimi kaç mm'ye denk gelir?)
+#define A0_FIZIKSEL_ARALIK_MM 400.0  // (örnek: 0-400mm aralığı)
 
 // ═══════════════════════════════════════════════════════════════
 // NOTLAR

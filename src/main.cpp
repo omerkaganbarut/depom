@@ -1,11 +1,11 @@
-// main.cpp - ÇİFT KAYIT/OYNATMA + RESET ÖZELLİKLİ
+// main.cpp - PEEK VERSION (DÜZELTILMIŞ)
 // ═══════════════════════════════════════════════════════════════
-// YENİ KOMUTLAR:
-//   RSTZ  → Z encoder'ı sıfırla
-//   RSTX  → X encoder'ı sıfırla  
-//   RSTB  → BIG encoder'ı sıfırla
+// DÜZELTİLEN HATALAR:
+//   ✅ bigEnc.reset() kullanıldı (setPosition değil)
+//   ✅ a0FiltreliOku() kullanıldı (a0FiltreOku değil)
+//   ✅ OPKON_PIN kullanıldı (A0_PIN değil)
 // ═══════════════════════════════════════════════════════════════
-
+#include "MoveSalinim.h" 
 #include <Arduino.h>
 #include "Config.h"
 #include "PulseAt.h"
@@ -27,10 +27,11 @@ StepMotorEncoder bigEnc(ENC3_A_PIN, ENC3_B_PIN);
 // ═══════════════════════════════════════════════════════════════
 // DİNAMİK PARAMETRELER
 // ═══════════════════════════════════════════════════════════════
-static long bigFreqMin = 50;
+static long bigFreqMin = 10;
 static long bigFreqMax = 100;
 static long zEncMin = 0;
 static long zEncMax = 20000;
+static long bigFreqRef = 30;  // ✅ YENİ EKLENEN (eski BIG_FREQ_REF_HZ)
 
 // ═══════════════════════════════════════════════════════════════
 // ÇİFT KAYIT/OYNATMA X POZİSYONLARI
@@ -54,10 +55,11 @@ void handleA0Oku();
 void handleCiftKayit();
 void handleCiftOynatma();
 void handleReset(char motor);
-void handleXAyarla(const char* cmd);
-void handleXShow();
-void handleX2Ayarla(const char* cmd);
 void handleX1Ayarla(const char* cmd);
+void handleX2Ayarla(const char* cmd);
+void handleXShow();
+void handleBigRefAyarla(const char* cmd);
+void handleBigRefShow();
 
 // ═══════════════════════════════════════════════════════════════
 // SETUP
@@ -87,6 +89,7 @@ void setup() {
   Serial.println(F("[4/5] Oynatma modülü ayarlanıyor..."));
   oynatmaEncoderSetup(&bigEnc, &zEnc);
   oynatmaParametreSetup(&bigFreqMin, &bigFreqMax, &zEncMin, &zEncMax);
+  oynatmaRefHizSetup(&bigFreqRef);  // ✅ YENİ EKLE
   Serial.println(F("✓ Oynatma modülü hazır!\n"));
   
   Serial.println(F("[5/5] Çift Kayıt/Oynatma modülleri ayarlanıyor..."));
@@ -94,11 +97,15 @@ void setup() {
   coEncoderSetup(&bigEnc, &xEnc, &zEnc);
   coParametreSetup(&bigFreqMin, &bigFreqMax, &zEncMin, &zEncMax);
   Serial.println(F("✓ Çift modüller hazır!\n"));
+
+  // ✅ YENİ: MoveSalinim encoder setup
+  msEncoderSetup(&xEnc);
   
   Serial.println(F("╔════════════════════════════════════════════════╗"));
   Serial.println(F("║            SİSTEM HAZIR! 🚀                    ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝\n"));
-  
+  pinMode(KAYNAK_ROLE_PIN, OUTPUT);
+  digitalWrite(KAYNAK_ROLE_PIN, HIGH); // NORMALDE AÇIK
   yazdirMenu();
 }
 
@@ -112,47 +119,19 @@ void loop() {
   ckRun();
   coRun();
 
-  // MANUEL KOMUT ARKA PLANLARI (Sadece diğerleri aktif değilse)
+  // ✅ YENİ: Salınım döngüsü (sadece TEK oynatma ile çalışır)
+  if (oynatmaAktifMi() && !ckAktifMi()) {  // Güvenlik kontrolü
+    msRun();
+  }
+  
+  // Oynatma bitince salınımı durdur
+  if (oynatmaTamamlandiMi() && msAktifMi()) {
+    msDurdur();
+    Serial.println("Oynatma bitti, salinim durduruldu!");
+  }
   // ═══════════════════════════════════════════════════════════════
-  
-  // ─────────────────────────────────────────────────────────────
-  // MOTOR Z - Manuel Pulse Arka Planı
-  // ─────────────────────────────────────────────────────────────
-  if (pulseAtAktifMi(MOTOR_Z)) {
-    if (!moveToAktifMi(MOTOR_Z) && 
-        !oynatmaAktifMi() && 
-        !coAktifMi()) {
-      useMotor(MOTOR_Z);
-      pulseAt(0, 0, 0);
-    }
-  }
-  
-  // ─────────────────────────────────────────────────────────────
-  // MOTOR X - Manuel Pulse Arka Planı
-  // ─────────────────────────────────────────────────────────────
-  if (pulseAtAktifMi(MOTOR_X)) {
-    if (!moveToAktifMi(MOTOR_X) && 
-        !ckAktifMi() && 
-        !coAktifMi()) {
-      useMotor(MOTOR_X);
-      pulseAt(0, 0, 0);
-    }
-  }
-  
-  // ─────────────────────────────────────────────────────────────
-  // MOTOR BIG - Manuel Pulse Arka Planı
-  // ─────────────────────────────────────────────────────────────
-  if (pulseAtAktifMi(MOTOR_B)) {
-    if (!moveToAktifMi(MOTOR_B) && 
-        !kayitAktifMi() && 
-        !oynatmaAktifMi() && 
-        !ckAktifMi() && 
-        !coAktifMi()) {
-      useMotor(MOTOR_B);
-      pulseAt(0, 0, 0);
-    }
-  }
-  
+  // SERIAL OKUMA (Her zaman çalışıyor - blocking YOK!)
+  // ═══════════════════════════════════════════════════════════════
   while (Serial.available() > 0) {
     char c = Serial.read();
     
@@ -184,7 +163,20 @@ void handleCommand(const char* cmd) {
     handleReset(motor);
     return;
   }
-  
+  // ─────────────────────────────────────────────────────────────
+// [BR] BIG REFERANS HIZ AYARLA
+// ─────────────────────────────────────────────────────────────
+  // [BR] BIG REFERANS HIZ AYARLA
+  else if ((cmd[0] == 'B' || cmd[0] == 'b') && 
+         (cmd[1] == 'R' || cmd[1] == 'r')) {
+  // Eğer sadece "BR" ise göster, değilse ayarla.
+    if (cmd[2] == '\0') {
+     handleBigRefShow();  // "BR" → Göster
+   } else {
+      handleBigRefAyarla(cmd);  // "BR 50" veya "BR50" → Ayarla
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // [M] MOVETO: MZ/MX/MB hedef hz
   // ─────────────────────────────────────────────────────────────
@@ -228,48 +220,6 @@ void handleCommand(const char* cmd) {
   }
   
   // ─────────────────────────────────────────────────────────────
-  // [P] PULSEAT: PZ/PX/PB pulse yon hz
-  // ─────────────────────────────────────────────────────────────
-  else if (cmd[0] == 'P' || cmd[0] == 'p') {
-    char motor = cmd[1];
-    uint8_t motorIndex;
-    
-    if (motor == 'Z' || motor == 'z') motorIndex = MOTOR_Z;
-    else if (motor == 'X' || motor == 'x') motorIndex = MOTOR_X;
-    else if (motor == 'B' || motor == 'b') motorIndex = MOTOR_B;
-    else {
-      Serial.println(F("✗ Geçersiz motor! (PZ/PX/PB)"));
-      return;
-    }
-    
-    unsigned long pulse;
-    int yon;
-    unsigned int hz;
-    
-    if (sscanf(cmd + 2, "%lu %d %u", &pulse, &yon, &hz) == 3) {
-      if (pulse == 0 || hz == 0) {
-        Serial.println(F("✗ Pulse ve Hz 0'dan büyük olmalı!"));
-        return;
-      }
-      
-      Serial.print(F("[P"));
-      Serial.print(motor);
-      Serial.print(F("] "));
-      Serial.print(pulse);
-      Serial.print(F("p "));
-      Serial.print(yon ? F("←") : F("→"));
-      Serial.print(F(" "));
-      Serial.print(hz);
-      Serial.println(F("Hz ✓"));
-      
-      useMotor(motorIndex);
-      pulseAt(pulse, yon, hz);
-    } else {
-      Serial.println(F("✗ Format: PZ pulse yon hz"));
-    }
-  }
-  
-  // ─────────────────────────────────────────────────────────────
   // [D] DURDUR: DZ/DX/DB
   // ─────────────────────────────────────────────────────────────
   else if (cmd[0] == 'D' || cmd[0] == 'd') {
@@ -295,7 +245,7 @@ void handleCommand(const char* cmd) {
   // ─────────────────────────────────────────────────────────────
   // [S] ACİL DURDURMA
   // ─────────────────────────────────────────────────────────────
-  else if (cmd[0] == 'S' || cmd[0] == 's') {
+  else if ((cmd[0] == 'S' || cmd[0] == 's') && (cmd[1] == '\0')) {
     Serial.println(F("\n⚠️  ACİL DURDURMA!"));
     pulseAtHepsiniDurdur();
     moveToHepsiniDurdur();
@@ -303,7 +253,16 @@ void handleCommand(const char* cmd) {
     oynatmaDurdur();
     ckDurdur();
     coDurdur();
+    msDurdur();
+    digitalWrite(KAYNAK_ROLE_PIN,HIGH); // KAPALIYA AL
     Serial.println(F("✓ Tüm sistemler durduruldu!\n"));
+  }
+
+  else if ((cmd[0] == 'S' || cmd[0] == 's') && (cmd[1] == 'M' || cmd[1] == 'm')) {
+    Serial.println(F("\n⚠️  ACİL MOTOR DURDURMA!"));
+    pulseAtHepsiniDurdur();
+    moveToHepsiniDurdur();
+    Serial.println(F("✓ Tüm motorlar durduruldu!\n"));
   }
   
   // ─────────────────────────────────────────────────────────────
@@ -312,12 +271,43 @@ void handleCommand(const char* cmd) {
   else if (cmd[0] == 'E' || cmd[0] == 'e') {
     handleEncoderOku();
   }
+
+  // ─────────────────────────────────────────────────────────
+  else if (strcmp(cmd, "KL") == 0) {
+    Serial.println(F("\n═══════════════════════════════════════"));
+    Serial.println(F("  KAYIT1 VERİLERİ"));
+    Serial.println(F("═══════════════════════════════════════"));
+    ckKayit1Listele();
+      
+    Serial.println(F("\n═══════════════════════════════════════"));
+    Serial.println(F("  KAYIT2 VERİLERİ"));
+    Serial.println(F("═══════════════════════════════════════"));
+    ckKayit2Listele();
+      
+    Serial.print(F("\nGlobal A0 Min: "));
+    Serial.println(globalA0Min);
+    Serial.print(F("Global A0 Max: "));
+    Serial.println(globalA0Max);
+  }
   
   // ─────────────────────────────────────────────────────────────
   // [A] A0 SENSÖR
   // ─────────────────────────────────────────────────────────────
   else if (cmd[0] == 'A' || cmd[0] == 'a') {
     handleA0Oku();
+  }
+
+  // ─────────────────────────────────────────────────────────
+  else if (strcmp(cmd, "K") == 0) {
+    digitalWrite(KAYNAK_ROLE_PIN, !digitalRead(KAYNAK_ROLE_PIN));
+    Serial.println(F("[KAYNAK] Toggle"));
+ }
+  
+  // ─────────────────────────────────────────────────────────────
+  // [H] HELP/MENU
+  // ─────────────────────────────────────────────────────────────
+  else if (cmd[0] == 'H' || cmd[0] == 'h') {
+    yazdirMenu();
   }
   
   // ─────────────────────────────────────────────────────────────
@@ -337,133 +327,37 @@ void handleCommand(const char* cmd) {
   }
   
   // ─────────────────────────────────────────────────────────────
-  // [C1] KAYIT1 LİSTELE
+  // [X1] X1 POZİSYON AYARLA
   // ─────────────────────────────────────────────────────────────
-  else if ((cmd[0] == 'C' || cmd[0] == 'c') && cmd[1] == '1') {
-    if (ckTamamlandiMi()) {
-      ckKayit1Listele();
-    } else {
-      Serial.println(F("✗ Kayıt yok!"));
-    }
-  }
-  
-  // ─────────────────────────────────────────────────────────────
-  // [C2] KAYIT2 LİSTELE
-  // ─────────────────────────────────────────────────────────────
-  else if ((cmd[0] == 'C' || cmd[0] == 'c') && cmd[1] == '2') {
-    if (ckTamamlandiMi()) {
-      ckKayit2Listele();
-    } else {
-      Serial.println(F("✗ Kayıt yok!"));
-    }
-  }
-  
-  // ─────────────────────────────────────────────────────────────
-  // [H] YARDIM
-  // ─────────────────────────────────────────────────────────────
-  else if (cmd[0] == 'H' || cmd[0] == 'h' || cmd[0] == '?') {
-    yazdirMenu();
-  }
-  
-  
-  
-  // ─────────────────────────────────────────────────────────────
-  // [X1] X1 POZİSYON AYARLAMA
-  // ─────────────────────────────────────────────────────────────
-  else if (strncmp(cmd, "X1", 2) == 0) {
+  else if ((cmd[0] == 'X' || cmd[0] == 'x') && 
+           (cmd[1] == '1')) {
     handleX1Ayarla(cmd);
   }
   
   // ─────────────────────────────────────────────────────────────
-  // [X2] X2 POZİSYON AYARLAMA
+  // [X2] X2 POZİSYON AYARLA
   // ─────────────────────────────────────────────────────────────
-  else if (strncmp(cmd, "X2", 2) == 0) {
+  else if ((cmd[0] == 'X' || cmd[0] == 'x') && 
+           (cmd[1] == '2')) {
     handleX2Ayarla(cmd);
   }
   
   // ─────────────────────────────────────────────────────────────
-  // [X SHOW] X POZİSYONLARINI GÖSTER
+  // [X SHOW] X POZİSYONLARI GÖSTER
   // ─────────────────────────────────────────────────────────────
-  else if (strcmp(cmd, "X SHOW") == 0 || strcmp(cmd, "XSHOW") == 0) {
+  else if ((cmd[0] == 'X' || cmd[0] == 'x') && 
+           (cmd[1] == ' ' || cmd[1] == '\0')) {
     handleXShow();
   }
+  
   // ─────────────────────────────────────────────────────────────
   // BİLİNMEYEN KOMUT
   // ─────────────────────────────────────────────────────────────
   else {
-    Serial.print(F("✗ Bilinmeyen: "));
+    Serial.print(F("✗ Bilinmeyen komut: "));
     Serial.println(cmd);
+    Serial.println(F("  'H' yazın menüyü görmek için."));
   }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// RESET İŞLEYİCİSİ
-// ═══════════════════════════════════════════════════════════════
-void handleReset(char motor) {
-  if (motor == 'Z' || motor == 'z') {
-    zEnc.reset();
-    Serial.println(F("[RSTZ] ✓ Z encoder sıfırlandı (0)"));
-  }
-  else if (motor == 'X' || motor == 'x') {
-    xEnc.reset();
-    Serial.println(F("[RSTX] ✓ X encoder sıfırlandı (0)"));
-  }
-  else if (motor == 'B' || motor == 'b') {
-    bigEnc.reset();
-    Serial.println(F("[RSTB] ✓ BIG encoder sıfırlandı (0)"));
-  }
-  else {
-    Serial.println(F("✗ Geçersiz motor! (RSTZ/RSTX/RSTB)"));
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// MENÜ
-// ═══════════════════════════════════════════════════════════════
-void yazdirMenu() {
-  Serial.println(F("╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║              KOMUT LİSTESİ                     ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║ MOTOR KOMUTLARI                                ║"));
-  Serial.println(F("║───────────────────────────────────────────────║"));
-  Serial.println(F("║  MZ 500 50     → Z motor 500'e 50Hz            ║"));
-  Serial.println(F("║  MX 12000 100  → X motor 12000'e 100Hz         ║"));
-  Serial.println(F("║  MB 5000 80    → BIG motor 5000'e 80Hz         ║"));
-  Serial.println(F("║                                                ║"));
-  Serial.println(F("║  PZ 1000 0 50  → Z: 1000p ileri 50Hz           ║"));
-  Serial.println(F("║  PB 500 1 30   → BIG: 500p geri 30Hz           ║"));
-  Serial.println(F("║                                                ║"));
-  Serial.println(F("║  DZ            → Z motorunu durdur             ║"));
-  Serial.println(F("║  S             → ACİL DURDURMA (hepsi)         ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║ ENCODER İŞLEMLERİ                              ║"));
-  Serial.println(F("║───────────────────────────────────────────────║"));
-  Serial.println(F("║  E             → Encoder pozisyonları          ║"));
-  Serial.println(F("║  RSTZ          → Z encoder'ı sıfırla (0)       ║"));
-  Serial.println(F("║  RSTX          → X encoder'ı sıfırla (0)       ║"));
-  Serial.println(F("║  RSTB          → BIG encoder'ı sıfırla (0)     ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║ BİLGİ                                          ║"));
-  Serial.println(F("║───────────────────────────────────────────────║"));
-  Serial.println(F("║  A             → A0 sensör oku                 ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║ ÇİFT KAYIT/OYNATMA                             ║"));
-  Serial.println(F("║───────────────────────────────────────────────║"));
-  Serial.println(F("║  CK            → Çift Kayıt başlat             ║"));
-  Serial.println(F("║  CO            → Çift Oynatma başlat           ║"));
-  Serial.println(F("║  C1            → Kayıt1 listele                ║"));
-  Serial.println(F("║  C2            → Kayıt2 listele                ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║ X POZİSYON AYARLAMA                            ║"));
-  Serial.println(F("║───────────────────────────────────────────────║"));
-  Serial.println(F("║  X1 SET        → Mevcut X'i x1Pos yap          ║"));
-  Serial.println(F("║  X1 5000       → x1Pos'u 5000 yap              ║"));
-  Serial.println(F("║  X2 SET        → Mevcut X'i x2Pos yap          ║"));
-  Serial.println(F("║  X2 12000      → x2Pos'u 12000 yap             ║"));
-  Serial.println(F("║  X SHOW        → x1Pos ve x2Pos'u göster       ║"));
-  Serial.println(F("╠════════════════════════════════════════════════╣"));
-  Serial.println(F("║  H veya ?      → Bu menü                       ║"));
-  Serial.println(F("╚════════════════════════════════════════════════╝\n"));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -471,228 +365,203 @@ void yazdirMenu() {
 // ═══════════════════════════════════════════════════════════════
 void handleEncoderOku() {
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║          ENCODER POZİSYONLARI                  ║"));
+  Serial.println(F("║              ENCODER POZİSYONLARI              ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝"));
-  Serial.print(F("  Z  : "));
+  
+  Serial.print(F("  Z (ENC2): "));
   Serial.println(zEnc.getPosition());
-  Serial.print(F("  X  : "));
+  
+  Serial.print(F("  X (ENC1): "));
   Serial.println(xEnc.getPosition());
-  Serial.print(F("  BIG: "));
+  
+  Serial.print(F("  BIG (ENC3): "));
   Serial.println(bigEnc.getPosition());
+  
   Serial.println();
 }
 
 // ═══════════════════════════════════════════════════════════════
-// A0 SENSÖR
+// A0 SENSÖR OKU (DÜZELTILDI)
 // ═══════════════════════════════════════════════════════════════
 void handleA0Oku() {
-  Serial.print(F("\n[A0] Okuma... "));
-  uint16_t val = a0FiltreliOku();
-  Serial.print(val);
-  Serial.println(F(" (0-1023)\n"));
+  // ✅ DÜZELTME: a0FiltreliOku() kullan (a0FiltreOku değil)
+  uint16_t filtrelenmis = a0FiltreliOku();
+  
+  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
+  Serial.println(F("║                A0 SENSÖR                       ║"));
+  Serial.println(F("╚════════════════════════════════════════════════╝"));
+  
+  Serial.print(F("  Filtreli : "));
+  Serial.println(filtrelenmis);
+  
+  Serial.println();
+}
+// ═══════════════════════════════════════════════════════════════
+// BIG REFERANS HIZ AYARLAMA
+// ═══════════════════════════════════════════════════════════════
+void handleBigRefAyarla(const char* cmd) {
+  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
+  Serial.println(F("║        BIG REFERANS HIZ AYARLAMA               ║"));
+  Serial.println(F("╚════════════════════════════════════════════════╝\n"));
+
+  // cmd başlangıcı: "BR..." -> argümanı BR'den sonraki kısımdan al, boşlukları at
+  const char* arg = cmd + 2; // BR'den hemen sonra
+  while (*arg == ' ' || *arg == '\t') arg++; // boşlukları at
+
+  long yeniDeger;
+  if (sscanf(arg, "%ld", &yeniDeger) == 1) {
+    if (yeniDeger < 10 || yeniDeger > 500) {
+      Serial.println(F("✗ Değer 10-500 arasında olmalı!"));
+      Serial.println();
+      return;
+    }
+
+    bigFreqRef = yeniDeger;
+
+    Serial.println(F("✓ Referans hız güncellendi!"));
+    Serial.print(F("  bigFreqRef = "));
+    Serial.print(bigFreqRef);
+    Serial.println(F(" Hz"));
+  } else {
+    Serial.println(F("✗ Geçersiz format!"));
+    Serial.println(F("  Kullanım: BR 50 veya BR50"));
+  }
+
+  Serial.println();
 }
 
+
 // ═══════════════════════════════════════════════════════════════
-// ÇİFT KAYIT İŞLEYİCİSİ
+// BIG REFERANS HIZ GÖSTER
+// ═══════════════════════════════════════════════════════════════
+void handleBigRefShow() {
+  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
+  Serial.println(F("║         BIG REFERANS HIZ AYARI                 ║"));
+  Serial.println(F("╚════════════════════════════════════════════════╝"));
+  
+  Serial.print(F("  bigFreqRef: "));
+  Serial.print(bigFreqRef);
+  Serial.println(F(" Hz"));
+  
+  Serial.println(F("───────────────────────────────────────────────"));
+  Serial.println(F("  Not: Depo kenarındaki (globalA0Min) hızdır."));
+  Serial.println(F("       İçe doğru gidildikçe hız otomatik artar."));
+  
+  Serial.println();
+}
+// ═══════════════════════════════════════════════════════════════
+// ÇİFT KAYIT BAŞLAT
 // ═══════════════════════════════════════════════════════════════
 void handleCiftKayit() {
-  if (ckAktifMi() || coAktifMi() || kayitAktifMi() || oynatmaAktifMi()) {
-    Serial.println(F("\n✗ Başka işlem aktif! 'S' ile durdur.\n"));
-    return;
-  }
-  
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║          ÇİFT KAYIT PARAMETRELERİ              ║"));
+  Serial.println(F("║             ÇİFT KAYIT BAŞLATMA                ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝"));
-  Serial.print(F("  X1 Pozisyon : "));
+  
+  Serial.println(F("\nMevcut X Pozisyonları:"));
+  Serial.print(F("  x1Pos = "));
   Serial.println(x1Pos);
-  Serial.print(F("  X2 Pozisyon : "));
+  Serial.print(F("  x2Pos = "));
   Serial.println(x2Pos);
-  Serial.println(F("  Kayıt1      : İleri (BIG: 0→16000)"));
-  Serial.println(F("  Kayıt2      : Geri  (BIG: 16000→0)"));
   Serial.println(F("───────────────────────────────────────────────"));
   
-  // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-  while (Serial.available() > 0) {
-    Serial.read();
-  }
-  
-  Serial.print(F("Başlat? (Y/N): "));
-  
-  unsigned long t = millis();
-  while (Serial.available() == 0 && millis() - t < 30000) delay(10);
-  
-  if (Serial.available() > 0) {
-    char c = Serial.read();
-    Serial.println(c);
-    
-    if (c == 'Y' || c == 'y') {
-      ckBaslat(x1Pos, x2Pos, 0, 1);
-      Serial.println(F("\n✓ Çift kayıt başlatıldı!"));
-      Serial.println(F("═══════════════════════════════════════════════"));
-      Serial.println(F("ADIM 1/7: X1 pozisyonuna gidiliyor..."));
-    } else {
-      Serial.println(F("✗ İptal\n"));
-    }
-  } else {
-    Serial.println(F("\n✗ Timeout\n"));
-  }
+  // Direkt başlat!
+  ckBaslat(x1Pos, x2Pos, 0, 1);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ÇİFT OYNATMA İŞLEYİCİSİ
+// ÇİFT OYNATMA BAŞLAT
 // ═══════════════════════════════════════════════════════════════
 void handleCiftOynatma() {
-  if (!ckTamamlandiMi()) {
-    Serial.println(F("\n✗ Kayıt yok! Önce CK komutu.\n"));
-    return;
-  }
-  
-  if (coAktifMi() || kayitAktifMi() || oynatmaAktifMi()) {
-    Serial.println(F("\n✗ Başka işlem aktif!\n"));
-    return;
-  }
-  
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
-  Serial.println(F("║         ÇİFT OYNATMA PARAMETRELERİ             ║"));
+  Serial.println(F("║            ÇİFT OYNATMA BAŞLATMA               ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝"));
-  Serial.print(F("  X1 Pozisyon : "));
+  
+  Serial.println(F("\nMevcut Parametreler:"));
+  Serial.print(F("  x1Pos     = "));
   Serial.println(x1Pos);
-  Serial.print(F("  X2 Pozisyon : "));
+  Serial.print(F("  x2Pos     = "));
   Serial.println(x2Pos);
-  Serial.print(F("  A0 Min      : "));
-  Serial.println(ckGlobalA0Min());
-  Serial.print(F("  A0 Max      : "));
-  Serial.println(ckGlobalA0Max());
-  Serial.print(F("  BIG Freq    : "));
-  Serial.print(bigFreqMin);
-  Serial.print(F("-"));
+  Serial.print(F("  BigFreqMin= "));
+  Serial.println(bigFreqMin);
+  Serial.print(F("  BigFreqMax= "));
   Serial.println(bigFreqMax);
-  Serial.print(F("  Z Enc Max   : "));
+  Serial.print(F("  zEncMin   = "));
+  Serial.println(zEncMin);
+  Serial.print(F("  zEncMax   = "));
   Serial.println(zEncMax);
   Serial.println(F("───────────────────────────────────────────────"));
   
-  // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-  while (Serial.available() > 0) {
-    Serial.read();
-  }
-  
-  Serial.print(F("Başlat? (Y/N): "));
-  
-  unsigned long t = millis();
-  while (Serial.available() == 0 && millis() - t < 30000) delay(10);
-  
-  if (Serial.available() > 0) {
-    char c = Serial.read();
-    Serial.println(c);
-    
-    if (c == 'Y' || c == 'y') {
-      coBaslat(x1Pos, x2Pos);
-      Serial.println(F("\n✓ Çift oynatma başlatıldı!"));
-      Serial.println(F("═══════════════════════════════════════════════"));
-      Serial.println(F("ADIM 1/7: X1 pozisyonuna gidiliyor..."));
-    } else {
-      Serial.println(F("✗ İptal\n"));
-    }
-  } else {
-    Serial.println(F("\n✗ Timeout\n"));
-  }
+  // Direkt başlat!
+  coBaslat(x1Pos, x2Pos);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// RESET (ENCODER SIFIRLAMA) - DÜZELTILDI
+// ═══════════════════════════════════════════════════════════════
+void handleReset(char motor) {
+  Serial.println(F("\n╔════════════════════════════════════════════════╗"));
+  Serial.println(F("║            ENCODER SIFIRLAMA                   ║"));
+  Serial.println(F("╚════════════════════════════════════════════════╝\n"));
+  
+  if (motor == 'Z' || motor == 'z') {
+    long onceki = zEnc.getPosition();
+    // ✅ DÜZELTME: reset() kullan (setPosition değil)
+    zEnc.reset();
+    
+    Serial.print(F("  Z Encoder sıfırlandı! (Önceki: "));
+    Serial.print(onceki);
+    Serial.println(F(")"));
+  }
+  else if (motor == 'X' || motor == 'x') {
+    long onceki = xEnc.getPosition();
+    // ✅ DÜZELTME: reset() kullan (setPosition değil)
+    xEnc.reset();
+    
+    Serial.print(F("  X Encoder sıfırlandı! (Önceki: "));
+    Serial.print(onceki);
+    Serial.println(F(")"));
+  }
+  else if (motor == 'B' || motor == 'b') {
+    long onceki = bigEnc.getPosition();
+    // ✅ DÜZELTME: reset() kullan (setPosition değil)
+    bigEnc.reset();
+    
+    Serial.print(F("  BIG Encoder sıfırlandı! (Önceki: "));
+    Serial.print(onceki);
+    Serial.println(F(")"));
+  }
+  else {
+    Serial.println(F("✗ Geçersiz motor! (Z/X/B)"));
+  }
+  
+  Serial.println();
+}
 
 // ═══════════════════════════════════════════════════════════════
-// X POZİSYON AYARLAMA FONKSİYONLARI
+// X1 POZİSYON AYARLAMA
 // ═══════════════════════════════════════════════════════════════
-
-// ─────────────────────────────────────────────────────────────
-// [X1 SET] → Mevcut X encoder'ı x1Pos olarak kaydet
-// [X1 5000] → x1Pos'u 5000 olarak ayarla
-// ─────────────────────────────────────────────────────────────
 void handleX1Ayarla(const char* cmd) {
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
   Serial.println(F("║           X1 POZİSYON AYARLAMA                 ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝\n"));
   
-  // [DURUM 1] "X1 SET" komutu → Mevcut encoder'ı al
-  if (strstr(cmd, "SET") != nullptr) {
-    long mevcutX = xEnc.getPosition();
+  // [DURUM 1] "X1 SET" → Mevcut encoder'ı al
+  if (strstr(cmd, "SET") != nullptr || strstr(cmd, "set") != nullptr) {
+    x1Pos = xEnc.getPosition();
     
-    Serial.print(F("  Mevcut X encoder: "));
-    Serial.println(mevcutX);
-    
-    // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-    while (Serial.available() > 0) {
-      Serial.read();
-    }
-    
-    Serial.print(F("\n  X1 pozisyonunu bu değere ayarla? (Y/N): "));
-    
-    // [ONAY BEKLE]
-    unsigned long baslangic = millis();
-    while (Serial.available() == 0 && millis() - baslangic < 30000) {
-      delay(10);
-    }
-    
-    if (Serial.available() > 0) {
-      char onay = Serial.read();
-      Serial.println(onay);
-      
-      if (onay == 'Y' || onay == 'y') {
-        x1Pos = mevcutX;
-        
-        Serial.println(F("\n✓ X1 pozisyonu güncellendi!"));
-        Serial.print(F("  x1Pos = "));
-        Serial.println(x1Pos);
-      }
-      else {
-        Serial.println(F("\n✗ İptal edildi."));
-      }
-    }
-    else {
-      Serial.println(F("\n✗ Timeout!"));
-    }
+    Serial.println(F("✓ X1 pozisyonu güncellendi!"));
+    Serial.print(F("  x1Pos = "));
+    Serial.println(x1Pos);
   }
-  
-  // [DURUM 2] "X1 5000" komutu → Manuel değer gir
+  // [DURUM 2] "X1 5000" → Manuel değer
   else {
     long yeniDeger;
-    
-    // "X1 " kısmını atla, sayıyı al
     if (sscanf(cmd + 3, "%ld", &yeniDeger) == 1) {
-      Serial.print(F("  Yeni X1 pozisyonu: "));
-      Serial.println(yeniDeger);
+      x1Pos = yeniDeger;
       
-      // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-      while (Serial.available() > 0) {
-        Serial.read();
-      }
-      
-      Serial.print(F("\n  X1'i bu değere ayarla? (Y/N): "));
-      
-      // [ONAY BEKLE]
-      unsigned long baslangic = millis();
-      while (Serial.available() == 0 && millis() - baslangic < 30000) {
-        delay(10);
-      }
-      
-      if (Serial.available() > 0) {
-        char onay = Serial.read();
-        Serial.println(onay);
-        
-        if (onay == 'Y' || onay == 'y') {
-          x1Pos = yeniDeger;
-          
-          Serial.println(F("\n✓ X1 pozisyonu güncellendi!"));
-          Serial.print(F("  x1Pos = "));
-          Serial.println(x1Pos);
-        }
-        else {
-          Serial.println(F("\n✗ İptal edildi."));
-        }
-      }
-      else {
-        Serial.println(F("\n✗ Timeout!"));
-      }
+      Serial.println(F("✓ X1 pozisyonu güncellendi!"));
+      Serial.print(F("  x1Pos = "));
+      Serial.println(x1Pos);
     }
     else {
       Serial.println(F("✗ Geçersiz format!"));
@@ -703,95 +572,31 @@ void handleX1Ayarla(const char* cmd) {
   Serial.println();
 }
 
-// ─────────────────────────────────────────────────────────────
-// [X2 SET] → Mevcut X encoder'ı x2Pos olarak kaydet
-// [X2 12000] → x2Pos'u 12000 olarak ayarla
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// X2 POZİSYON AYARLAMA
+// ═══════════════════════════════════════════════════════════════
 void handleX2Ayarla(const char* cmd) {
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
   Serial.println(F("║           X2 POZİSYON AYARLAMA                 ║"));
   Serial.println(F("╚════════════════════════════════════════════════╝\n"));
   
-  // [DURUM 1] "X2 SET" komutu → Mevcut encoder'ı al
-  if (strstr(cmd, "SET") != nullptr) {
-    long mevcutX = xEnc.getPosition();
+  // [DURUM 1] "X2 SET" → Mevcut encoder'ı al
+  if (strstr(cmd, "SET") != nullptr || strstr(cmd, "set") != nullptr) {
+    x2Pos = xEnc.getPosition();
     
-    Serial.print(F("  Mevcut X encoder: "));
-    Serial.println(mevcutX);
-    
-    // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-    while (Serial.available() > 0) {
-      Serial.read();
-    }
-    
-    Serial.print(F("\n  X2 pozisyonunu bu değere ayarla? (Y/N): "));
-    
-    // [ONAY BEKLE]
-    unsigned long baslangic = millis();
-    while (Serial.available() == 0 && millis() - baslangic < 30000) {
-      delay(10);
-    }
-    
-    if (Serial.available() > 0) {
-      char onay = Serial.read();
-      Serial.println(onay);
-      
-      if (onay == 'Y' || onay == 'y') {
-        x2Pos = mevcutX;
-        
-        Serial.println(F("\n✓ X2 pozisyonu güncellendi!"));
-        Serial.print(F("  x2Pos = "));
-        Serial.println(x2Pos);
-      }
-      else {
-        Serial.println(F("\n✗ İptal edildi."));
-      }
-    }
-    else {
-      Serial.println(F("\n✗ Timeout!"));
-    }
+    Serial.println(F("✓ X2 pozisyonu güncellendi!"));
+    Serial.print(F("  x2Pos = "));
+    Serial.println(x2Pos);
   }
-  
-  // [DURUM 2] "X2 12000" komutu → Manuel değer gir
+  // [DURUM 2] "X2 12000" → Manuel değer
   else {
     long yeniDeger;
-    
-    // "X2 " kısmını atla, sayıyı al
     if (sscanf(cmd + 3, "%ld", &yeniDeger) == 1) {
-      Serial.print(F("  Yeni X2 pozisyonu: "));
-      Serial.println(yeniDeger);
+      x2Pos = yeniDeger;
       
-      // ✅ BUFFER TEMİZLE (soru sormadan ÖNCE!)
-      while (Serial.available() > 0) {
-        Serial.read();
-      }
-      
-      Serial.print(F("\n  X2'yi bu değere ayarla? (Y/N): "));
-      
-      // [ONAY BEKLE]
-      unsigned long baslangic = millis();
-      while (Serial.available() == 0 && millis() - baslangic < 30000) {
-        delay(10);
-      }
-      
-      if (Serial.available() > 0) {
-        char onay = Serial.read();
-        Serial.println(onay);
-        
-        if (onay == 'Y' || onay == 'y') {
-          x2Pos = yeniDeger;
-          
-          Serial.println(F("\n✓ X2 pozisyonu güncellendi!"));
-          Serial.print(F("  x2Pos = "));
-          Serial.println(x2Pos);
-        }
-        else {
-          Serial.println(F("\n✗ İptal edildi."));
-        }
-      }
-      else {
-        Serial.println(F("\n✗ Timeout!"));
-      }
+      Serial.println(F("✓ X2 pozisyonu güncellendi!"));
+      Serial.print(F("  x2Pos = "));
+      Serial.println(x2Pos);
     }
     else {
       Serial.println(F("✗ Geçersiz format!"));
@@ -802,9 +607,9 @@ void handleX2Ayarla(const char* cmd) {
   Serial.println();
 }
 
-// ─────────────────────────────────────────────────────────────
-// [X SHOW] → x1Pos ve x2Pos'u göster
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// X POZİSYONLARI GÖSTER
+// ═══════════════════════════════════════════════════════════════
 void handleXShow() {
   Serial.println(F("\n╔════════════════════════════════════════════════╗"));
   Serial.println(F("║          X POZİSYON AYARLARI                   ║"));
@@ -821,4 +626,30 @@ void handleXShow() {
   Serial.println(xEnc.getPosition());
   
   Serial.println();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MENÜ YAZDIR
+// ═══════════════════════════════════════════════════════════════
+void yazdirMenu() {
+  Serial.println(F("╔════════════════════════════════════════════════╗"));
+  Serial.println(F("║                ANA MENÜ                        ║"));
+  Serial.println(F("╚════════════════════════════════════════════════╝"));
+  Serial.println(F("  MZ/MX/MB <hedef> <hz> → Motor hareket"));
+  Serial.println(F("  KL                    → Kayıt1 & Kayıt2 listele"));
+  Serial.println(F("  K                     → Kaynak röle toggle (Pin 14)"));
+  Serial.println(F("  DZ/DX/DB              → Motor durdur"));
+  Serial.println(F("  S                     → Acil durdur"));
+  Serial.println(F("  SM                    → MOTORLARI ACİL DURDUR"));
+  Serial.println(F("  E                     → Encoder oku"));
+  Serial.println(F("  A                     → A0 sensör oku"));
+  Serial.println(F("  RSTZ/RSTX/RSTB        → Encoder sıfırla"));
+  Serial.println(F("  X1 SET / X1 <değer>   → X1 pozisyon ayarla"));
+  Serial.println(F("  X2 SET / X2 <değer>   → X2 pozisyon ayarla"));
+  Serial.println(F("  X                     → X pozisyonlarını göster"));
+  Serial.println(F("  CK                    → Çift kayıt başlat"));
+  Serial.println(F("  CO                    → Çift oynatma başlat"));
+  Serial.println(F("  BR <değer> / BR       → Big referans hız ayarla/göster"));
+  Serial.println(F("  H                     → Menü"));
+  Serial.println(F("───────────────────────────────────────────────\n"));
 }

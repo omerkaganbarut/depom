@@ -20,15 +20,13 @@ struct KM_Sample {
 void kayitEncoderSetup(StepMotorEncoder* bigEncoder);
 void kayitBaslat(int yon);
 void kayitRun();
-bool kayitAktifMi();
 bool kayitTamamlandiMi();
 uint16_t kayitOrnekSayisi();
 
 // Read-only versiyon
 const KM_Sample* kayitVerileri();
 
-// ✅ YENİ: Düzenleme için non-const versiyon
-KM_Sample* kayitVerileriDuzenle();
+
 
 void kayitListele();
 void kayitDurdur();

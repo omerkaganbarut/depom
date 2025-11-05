@@ -100,8 +100,8 @@ void kayitRun() {
     // ───────────────────────────────────────────────────────────
     case KAYIT_BASLANGIC_BEKLE:
     // ───────────────────────────────────────────────────────────
-      // 2 saniye bekle
-      if (millis() - beklemeBaslangic >= 2000) {
+      // 1 saniye bekle
+      if (millis() - beklemeBaslangic >= 1000) {
         durum = KAYIT_MOTOR_CALISMA;
         idx = 1;  // İlk segment için
         
@@ -129,15 +129,20 @@ void kayitRun() {
         // HEDEF KONTROLÜ (Otomatik Düzeltme)
         // ═════════════════════════════════════════════════════
         long mevcutEnc = bigEnc->getPosition();
-        
+        long teoriHedef;
         // Teorik hedef hesapla (kümülatif)
-        long teoriHedef = baslangicEnc + (KAYIT_ARALIK * idx);
-        
+        if (kayitYon == 0) {
+          teoriHedef = baslangicEnc + (KAYIT_ARALIK * idx);
+        }
+        else {
+          teoriHedef = baslangicEnc - (KAYIT_ARALIK * idx);
+        }
+
         // Fark hesapla
         long fark = teoriHedef - mevcutEnc;
         
         // Sapma raporu (bilgilendirme)
-        if (abs(fark) > 0) {
+        if (abs(fark) >= 2) {
           Serial.print(F("   ⚠ Sapma: "));
           Serial.print(fark);
           Serial.print(F(" pulse (Hedef: "));
@@ -146,7 +151,7 @@ void kayitRun() {
           Serial.print(mevcutEnc);
           Serial.println(F(")"));
         }
-        
+        //delay(100);  // Kısa bekleme
         // Örnek almaya geç (düzeltme segmenti YOK!)
         durum = KAYIT_ORNEK_AL;
       }
@@ -155,6 +160,7 @@ void kayitRun() {
     // ───────────────────────────────────────────────────────────
     case KAYIT_ORNEK_AL:
   // Örnek alındı
+  //delay(100);  // Kısa bekleme
   samples[idx].enc = bigEnc->getPosition();
   samples[idx].a0 = a0FiltreliOku();
   
@@ -193,17 +199,7 @@ void kayitRun() {
     
     long gerekliFark = sonrakiTeoriHedef - mevcutEnc;
     unsigned long pulseSayisi = (unsigned long)abs(gerekliFark);
-    int yon = (gerekliFark > 0) ? 0 : 1;
-    
-    // ───────────────────────────────────────────────────────────
-    // DEBUG: Yön değişimi uyarısı
-    // ───────────────────────────────────────────────────────────
-    if (yon != kayitYon) {
-      Serial.print(F("  ⚠ Yön değişti! Kayıt yönü: "));
-      Serial.print(kayitYon ? F("Geri") : F("İleri"));
-      Serial.print(F(" | Hesaplanan: "));
-      Serial.println(yon ? F("Geri") : F("İleri"));
-    }
+    int yon = kayitYon;
     
     // Segment başlat
     useMotor(MOTOR_B);
@@ -232,9 +228,6 @@ void kayitRun() {
 // DURUM FONKSİYONLARI
 // ═══════════════════════════════════════════════════════════════
 
-bool kayitAktifMi() {
-  return (durum != KAYIT_KAPALI && durum != KAYIT_TAMAMLANDI);
-}
 
 bool kayitTamamlandiMi() {
   return (durum == KAYIT_TAMAMLANDI);
@@ -251,9 +244,6 @@ const KM_Sample* kayitVerileri() {
   return samples;
 }
 
-KM_Sample* kayitVerileriDuzenle() {
-  return samples;
-}
 
 // ═══════════════════════════════════════════════════════════════
 // LİSTELEME
